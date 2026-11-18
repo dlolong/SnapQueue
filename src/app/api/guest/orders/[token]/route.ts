@@ -1,0 +1,4 @@
+import { NextResponse } from "next/server";
+import { createClient } from "@/lib/supabase/server";
+import { rateLimit,tokenHash } from "@/lib/guest/security";
+export async function GET(request:Request,{params}:{params:Promise<{token:string}>}){const {token}=await params;if(!/^[A-Za-z0-9_-]{40,60}$/.test(token))return NextResponse.json({error:"Order not found"},{status:404});const supabase=await createClient();try{if(!await rateLimit(request.headers,"tracking","order-status",120,60))return NextResponse.json({error:"Too many status checks"},{status:429});const {data,error}=await supabase.rpc("get_guest_order",{p_tracking_token_hash:tokenHash(token)});if(error||!data)return NextResponse.json({error:"Order not found"},{status:404});return NextResponse.json(data,{headers:{"Cache-Control":"no-store"}})}catch(e){return NextResponse.json({error:e instanceof Error?e.message:"Order status unavailable"},{status:503})}}
