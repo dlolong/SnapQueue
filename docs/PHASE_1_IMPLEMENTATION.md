@@ -1,26 +1,19 @@
-# Phase 1 implementation
+# Event-centric implementation
 
-## Delivered
+## Current application
 
-- Supabase SSR auth actions for signup, login, logout, and protected application routes. Workspace onboarding creates a workspace; a database trigger atomically creates the owner membership.
-- A server workspace resolver obtains the authenticated user and their membership. User-supplied workspace IDs are not used as authorization claims. All application reads and mutations also filter by the resolved workspace; PostgreSQL RLS is the final isolation boundary.
-- Database-backed dashboard counts, event CRUD/search/status filters/detail/session navigation, session creation with atomic workspace counters, and event/walk-in session lists.
-- Private, multi-file original uploads with MIME allow-list, size ceiling, and file-signature validation. Photo records hold metadata and private object paths. Signed URLs are created for authenticated previews.
-- Searchable photo library, private media deletion, seeded system layouts, workspace duplication and customization.
-- Version 1 design JSON shared by editor preview and export rendering. The editor supports slot assignment, crop/fit, text, backgrounds, position, size, rotation, layer ordering, visibility, lock, duplicate, delete, undo, redo, save, and reload.
-- PNG/JPEG export uses the composition renderer rather than a UI screenshot. Supported canvas sizes are 600×1800, 1200×1800, and 1200×1200 at 300 DPI. Density metadata and actual raster dimensions are validated by the export handler before the private versioned object and `session_exports` row are recorded.
+- Workspace-scoped event CRUD, event layout editing, event QR access, and print queue management.
+- Three event sections: Layout, QR Code, and Print Queue.
+- One customized layout per event, with a reusable template as the starting point.
+- Guest uploads and print orders use the public event portal; guest uploads do not create photo sessions.
+- Guest order submissions enter `pending_approval` for operator review. The operator prints manually and updates queue status.
+- Source uploads remain private and temporary. Final print compositions are stored in `printable_images` and are the only records shown in Photo Library.
+- Dashboard counts events, print jobs, and printable images. The library supports event/date/size filters, download, and reprint.
 
-## Configuration required
+## Database migration
 
-- Apply all SQL migrations in order to the target Supabase project, including `0004_authenticated_table_grants.sql` so the authenticated API role has SQL table privileges while RLS enforces row-level tenant access.
-- Configure email/password auth, Site URL, and allowed local/production `/auth/callback` URLs in the Supabase dashboard. Set `NEXT_PUBLIC_SITE_URL` in each deployment environment.
-- Configure SMTP/email confirmation policy according to deployment needs.
-- Set `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, and server-only `SUPABASE_SECRET_KEY` in deployment. The publishable key replaces `anon`; the secret key replaces `service_role` for trusted guest upload/order routes. For zero-downtime migration, old `NEXT_PUBLIC_SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_ROLE_KEY` variables are accepted as fallback names until all deployments are moved.
+Apply migrations in numeric order through `0011_operator_review_queue.sql`. Migration 0010 adds the event-layout and final-image indexes while retaining legacy photo-session tables/rows. Migration 0011 repairs missing `print_jobs.package_code` columns and enforces operator review for guest orders.
 
-## Known limits
+## Verification limits
 
-- Workspace membership is secure, but the current UI selects the user's first workspace. Multi-workspace switching/invitations are not exposed yet.
-- Template customization edits a workspace-owned template's name, background, and JSON layout. It is a raw JSON layout editor rather than a full template-design mode.
-- Exports currently support PNG and JPEG. The browser canvas is the rendering runtime; highly complex font/color-management needs, PDF output, and server-side rendering are future enhancements.
-- The RLS isolation test is checked in for `supabase test db`, but cannot be run without a local Supabase/Postgres test stack.
-- Settings currently cover the workspace name. Export preference profiles and member administration are not implemented.
+TypeScript and lint checks are run locally. SQL migrations and RLS/queue behavior require a configured Supabase project or local Supabase stack. Physical print execution remains an operator action; the current application does not integrate a printer agent.

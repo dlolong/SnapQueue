@@ -1,7 +1,44 @@
-import Link from "next/link";
-import { notFound,redirect } from "next/navigation";
-import { PageHeader } from "@/components/page-header";
+import { notFound, redirect } from "next/navigation";
+import { Printer } from "lucide-react";
+import { EventOverviewHeader, EventTabs } from "@/components/events/event-navigation";
 import { QueueDashboard } from "@/components/guest/queue-dashboard";
-import { createAdminClient } from "@/lib/supabase/admin";
 import { requireWorkspace } from "@/lib/workspace";
-export default async function EventQueuePage({params}:{params:Promise<{eventId:string}>}){const [{eventId},{supabase,workspace,role}]=await Promise.all([params,requireWorkspace()]);if(!["owner","admin","operator"].includes(role))redirect("/events");const {data:event,error:eventError}=await supabase.from("events").select("id,name").eq("id",eventId).eq("workspace_id",workspace.id).maybeSingle();if(eventError)throw new Error(eventError.message);if(!event)notFound();const [{data:rows,error},{data:settings}]=await Promise.all([supabase.from("print_jobs").select("id,queue_number,order_reference,status,priority,print_quantity,print_size,package_code,submitted_at,started_at,completed_at,failure_reason,final_export_path,templates(name)").eq("event_id",eventId).eq("workspace_id",workspace.id).order("priority",{ascending:false}).order("queue_position"),supabase.from("event_guest_settings").select("queue_paused").eq("event_id",eventId).eq("workspace_id",workspace.id).maybeSingle()]);if(error)throw new Error(error.message);const admin=createAdminClient();const jobs=await Promise.all((rows??[]).map(async row=>{const {data:signed}=await admin.storage.from("snapqueue-guest-exports").createSignedUrl(row.final_export_path,600);const template=Array.isArray(row.templates)?row.templates[0]:row.templates;return {...row,template_name:template?.name??"Template",preview_url:signed?.signedUrl??null}}));return <><PageHeader eyebrow="EVENT PRINT QUEUE" title={`${event.name} queue`} description="Review guest print jobs and update their operator-confirmed status." action={<Link className="button secondary" href={`/events/${eventId}/guest`}>Guest portal settings</Link>}/><QueueDashboard eventId={eventId} initialJobs={jobs} initialPaused={settings?.queue_paused??false}/></>}
+import { createAdminClient } from "@/lib/supabase/admin";
+
+export default async function EventQueuePage({ params }: { params: Promise<{ eventId: string }> }) {
+  const [{ eventId }, { supabase, workspace, role }] = await Promise.all([params, requireWorkspace()]);
+  if (!["owner", "admin", "operator"].includes(role)) redirect("/events");
+
+  const [{ data: event, error: eventError }, { data: rows, error: jobsError }, { data: attemptRows, error: attemptsError }] = await Promise.all([
+    supabase.from("events").select("id,name,event_type,event_date,status").eq("id", eventId).eq("workspace_id", workspace.id).maybeSingle(),
+    supabase.from("print_jobs").select("id,queue_number,order_reference,status,print_quantity,print_size,submitted_at,final_export_path,layout_snapshot,templates(name)").eq("event_id", eventId).eq("workspace_id", workspace.id).neq("status", "deleted").order("submitted_at"),
+    supabase.from("print_attempts").select("id,print_job_id,attempt_type,status,initiated_at").eq("event_id", eventId).eq("workspace_id", workspace.id).order("initiated_at"),
+  ]);
+  if (eventError) throw new Error(eventError.message);
+  if (jobsError) throw new Error(jobsError.message);
+  if (attemptsError) throw new Error(attemptsError.message);
+  if (!event) notFound();
+
+  const admin = createAdminClient();
+  const jobs = await Promise.all((rows ?? []).map(async (row) => {
+    const { data: signed } = row.final_export_path
+      ? await admin.storage.from("snapqueue-guest-exports").createSignedUrl(row.final_export_path, 600)
+      : { data: null };
+    const templateRow = Array.isArray(row.templates) ? row.templates[0] : row.templates;
+    return {
+      ...row,
+      template_name: (row.layout_snapshot as { name?: string } | null)?.name ?? templateRow?.name ?? "Event layout",
+      preview_url: signed?.signedUrl ?? null,
+      attempts: (attemptRows ?? []).filter(attempt => attempt.print_job_id === row.id),
+    };
+  }));
+
+  return <div className="event-details-page">
+    <EventOverviewHeader event={event}/>
+    <EventTabs eventId={event.id} active="queue"/>
+    <section className="event-overview-queue event-queue-tab-content">
+      <div className="event-queue-heading"><h2><Printer size={21}/>Print queue</h2><span>{jobs.length ? `${jobs.length} orders` : "Live"}</span></div>
+      <QueueDashboard eventId={eventId} initialJobs={jobs}/>
+    </section>
+  </div>;
+}

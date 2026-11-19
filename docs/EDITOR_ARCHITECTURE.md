@@ -1,21 +1,9 @@
-# Editor architecture
+# Event layout and guest composition
 
-## Model
+The operator layout designer edits the event's single customized `DesignModel`. Its canvas is stored in `event_guest_settings` for compatibility with the queue/order RPCs and mirrored to the event's unique `event_layouts` row. The event layout version and JSON snapshot are copied into each submitted print job so later event edits do not alter existing jobs.
 
-`src/lib/design/model.ts` defines version 1 `DesignModel`: canvas dimensions/background/DPI plus typed photo, text, and shape elements. Element geometry uses print-canvas pixels; `zIndex` controls painter order. Photo elements refer to `photos.id`, not browser URLs. URLs remain transient signed credentials and are not persisted in the design.
+Guests receive only the active layout through the event's public guest projection. Their uploaded source images are private temporary uploads linked to the guest session and associated print job. The guest client assigns source photo IDs to predefined photo placeholders and uses the shared renderer to preview and export the final composition.
 
-`validDesign` validates the version, canvas bounds, element count, element types, and finite geometry. The API saves the model to `photo_sessions.design_config` only after checking authenticated workspace membership and session ownership. The selected template ID is checked by both RLS and a database trigger.
+The composition is rendered to a print-resolution PNG/JPEG with DPI metadata, validated by the order endpoint, stored privately, and indexed as one `printable_images` row per unique output path. Operators review new orders in `pending_approval`, approve them into the manual print queue, then update status after the physical print and pickup steps. Reprint jobs reuse the original stored final image.
 
-## Rendering
-
-`src/lib/design/render.ts` is the shared renderer. It draws the canvas background, then visible elements ordered by z-index, with rotation, photo cover/contain, shapes, and text. The editor uses it for its canvas preview. Export creates a separate canvas whose intrinsic width/height are the print pixels, calls the same renderer, encodes PNG/JPEG, then writes 300 DPI metadata (`pHYs` for PNG or JFIF density for JPEG).
-
-The export endpoint parses the image headers to verify true pixel dimensions and density before uploading. It writes to a private versioned object and inserts a `session_exports` row. A failed metadata insert removes the just-uploaded object. Previous exports remain intact.
-
-## Editing behavior
-
-The client editor stores a bounded undo/redo history, supports canvas drag and numeric geometry, and exposes layer controls for z-order, visibility, lock, duplicate, and delete. Photos are uploaded separately and assigned to photo elements by ID. Saving is an authenticated JSON `PUT`; exports are generated from the model and photo assets, never from a screenshot of the surrounding interface.
-
-## Extension points
-
-Increment `version` only with an explicit model migration/normalizer. New renderable element types belong in the shared renderer so preview and export stay consistent. Server-side export can replace browser rendering later without changing the stored model contract. Add output formats only with a metadata parser/encoder and dimension tests.
+Template records remain reusable starting points for operators. Guests do not receive a template catalog or layout-selection controls.

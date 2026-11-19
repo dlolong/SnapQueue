@@ -1,12 +1,111 @@
 "use client";
-import { useEffect,useState } from "react";
+
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import NextImage from "next/image";
+import { Check, Printer, RotateCcw, Trash2 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
-type Job={id:string;queue_number:string;order_reference:string;status:string;priority:number;print_quantity:number;print_size:string;package_code:string;submitted_at:string;started_at:string|null;completed_at:string|null;failure_reason:string|null;template_name:string;preview_url:string|null};
-const statusLabel:Record<string,string>={submitted:"Held while queue paused",pending_approval:"Awaiting approval",queued:"Queued for agent",printing:"Printing (agent reported)",ready_for_pickup:"Ready for pickup",completed:"Claimed / complete",failed:"Failed",cancelled:"Cancelled",rejected:"Rejected"};
-const actions:Record<string,{action:string;label:string}[]>={submitted:[{action:"cancel",label:"Cancel"}],pending_approval:[{action:"approve",label:"Approve"},{action:"reject",label:"Reject"},{action:"cancel",label:"Cancel"}],queued:[{action:"prioritize",label:"Prioritize"},{action:"mark_ready",label:"Operator confirms ready"},{action:"cancel",label:"Cancel"}],printing:[{action:"mark_ready",label:"Operator confirms ready"}],ready_for_pickup:[{action:"claim",label:"Mark claimed"}],failed:[{action:"retry",label:"Retry"}],completed:[{action:"reprint",label:"Reprint"}]};
-export function QueueDashboard({eventId,initialJobs,initialPaused}:{eventId:string;initialJobs:Job[];initialPaused:boolean}){const router=useRouter();const [jobs,setJobs]=useState(initialJobs);const [paused,setPaused]=useState(initialPaused);const [busy,setBusy]=useState("");const [error,setError]=useState("");const [filter,setFilter]=useState("all");useEffect(()=>setJobs(initialJobs),[initialJobs]);useEffect(()=>setPaused(initialPaused),[initialPaused]);useEffect(()=>{const client=createClient();const channel=client.channel(`print-jobs-${eventId}`).on("postgres_changes",{event:"*",schema:"public",table:"print_jobs",filter:`event_id=eq.${eventId}`},()=>router.refresh()).subscribe();const timer=setInterval(()=>router.refresh(),15000);return()=>{clearInterval(timer);void client.removeChannel(channel)}},[eventId,router]);
- const perform=async(action:string,jobId?:string)=>{setBusy(jobId??action);setError("");try{const r=await fetch(`/api/events/${eventId}/queue`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action,jobId})});const result=await r.json();if(!r.ok)throw Error(result.error??"Queue action failed");if(action==="pause")setPaused(true);if(action==="resume")setPaused(false);setBusy("");router.refresh()}catch(e){setBusy("");setError(e instanceof Error?e.message:"Queue action failed")}};
- const counts=new Map<string,number>();jobs.forEach(j=>counts.set(j.status,(counts.get(j.status)??0)+1));const filtered=filter==="all"?jobs:jobs.filter(j=>j.status===filter);const filters=["all","submitted","pending_approval","queued","printing","ready_for_pickup","completed","failed"];
- return <><div className="queue-toolbar"><div><span className={paused?"queue-state paused":"queue-state"}>{paused?"Queue paused":"Queue accepting orders"}</span><button className="button secondary" disabled={!!busy} onClick={()=>void perform(paused?"resume":"pause")}>{paused?"Resume queue":"Pause queue"}</button></div><span className="muted">Live updates with 15-second refresh fallback</span></div>{error&&<p className="form-error">{error}</p>}<div className="queue-tabs">{filters.map(status=><button key={status} className={filter===status?"queue-tab active":"queue-tab"} onClick={()=>setFilter(status)}>{status==="all"?"All":statusLabel[status]??status} <b>{status==="all"?jobs.length:counts.get(status)??0}</b></button>)}</div>{filtered.length?<section className="queue-list">{filtered.map(job=><article className="queue-job" key={job.id}><div className="queue-job-head"><strong>{job.queue_number}</strong><span className={`queue-status status-${job.status}`}>{statusLabel[job.status]??job.status}</span><span className="queue-priority">Priority {job.priority}</span></div><div className="queue-job-body">{job.preview_url?<a href={job.preview_url} target="_blank" rel="noreferrer"><NextImage src={job.preview_url} alt={`Preview for ${job.queue_number}`} width={350} height={350} unoptimized/></a>:<div className="queue-preview-missing">Preview unavailable</div>}<div className="queue-job-info"><b>{job.template_name}</b><span>{job.print_quantity} × {job.print_size} · {job.package_code}</span><span>Order {job.order_reference}</span><span>Submitted {new Date(job.submitted_at).toLocaleString()}</span>{job.failure_reason&&<span className="form-error">{job.failure_reason}</span>}<p className="guest-footnote">The queue records order and operator or agent status. SnapQueue does not confirm that a physical print occurred.</p></div></div><div className="queue-job-actions">{(actions[job.status]??[]).map(a=><button key={a.action} className={a.action==="reject"||a.action==="cancel"?"button danger":"button secondary"} disabled={!!busy} onClick={()=>{if(["cancel","reject","reprint","mark_ready","claim"].includes(a.action)&&!window.confirm(`${a.label} for ${job.queue_number}?`))return;void perform(a.action,job.id)}}>{busy===job.id?"Working…":a.label}</button>)}</div></article>)}</section>:<section className="empty-card"><h3>{filter==="all"?"No guest print jobs yet":`No ${statusLabel[filter]?.toLowerCase()??filter} jobs`}</h3><p>Submitted guest orders will appear here with persistent queue numbers.</p></section>}</>}
+
+type Attempt = { id: string; attempt_type: "print" | "reprint"; status: "initiated" | "confirmed"; initiated_at: string };
+type Job = {
+  id: string; queue_number: string; order_reference: string; status: "pending" | "accepted" | "printed" | "deleted";
+  print_quantity: number; print_size: string; submitted_at: string; template_name: string; preview_url: string | null;
+  attempts: Attempt[];
+};
+const filters = ["all", "pending", "accepted", "printed"] as const;
+type Filter = typeof filters[number];
+const statusLabels: Record<Job["status"], string> = { pending: "Pending", accepted: "Accepted", printed: "Printed", deleted: "Deleted" };
+
+export function QueueDashboard({ eventId, initialJobs }: { eventId: string; initialJobs: Job[] }) {
+  const router = useRouter();
+  const [jobs, setJobs] = useState(initialJobs);
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  const [filter, setFilter] = useState<Filter>("all");
+  useEffect(() => setJobs(initialJobs), [initialJobs]);
+  useEffect(() => {
+    const client = createClient();
+    const channel = client.channel(`print-jobs-${eventId}`).on("postgres_changes", { event: "*", schema: "public", table: "print_jobs", filter: `event_id=eq.${eventId}` }, () => router.refresh()).on("postgres_changes", { event: "*", schema: "public", table: "print_attempts", filter: `event_id=eq.${eventId}` }, () => router.refresh()).subscribe();
+    const timer = setInterval(() => router.refresh(), 15000);
+    return () => { clearInterval(timer); void client.removeChannel(channel); };
+  }, [eventId, router]);
+
+  const perform = async (action: "accept" | "confirm_printed" | "delete", job: Job) => {
+    if (action === "delete" && !window.confirm(`Delete ${job.queue_number} from the active queue?`)) return;
+    setBusy(job.id);
+    setError("");
+    try {
+      const response = await fetch(`/api/events/${eventId}/queue`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action, jobId: job.id }) });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? "Queue action failed");
+      if (action === "delete") setJobs(current => current.filter(item => item.id !== job.id));
+      else if (action === "accept") setJobs(current => current.map(item => item.id === job.id ? { ...item, status: "accepted" } : item));
+      else setJobs(current => current.map(item => item.id === job.id ? { ...item, status: "printed", attempts: item.attempts.map(attempt => attempt.attempt_type === "print" && attempt.status === "initiated" ? { ...attempt, status: "confirmed" } : attempt) } : item));
+      setBusy("");
+      router.refresh();
+    } catch (cause) {
+      setBusy("");
+      setError(cause instanceof Error ? cause.message : "Queue action failed");
+    }
+  };
+
+  const print = async (job: Job) => {
+    const popup = window.open("about:blank", "_blank");
+    if (!popup) {
+      setError("The print window was blocked. Allow pop-ups for SnapQueue, then try again.");
+      return;
+    }
+    popup.opener = null;
+    popup.document.write("<!doctype html><title>Preparing print…</title><p style='font:16px sans-serif;padding:24px'>Preparing your print…</p>");
+    setBusy(job.id);
+    setError("");
+    try {
+      const action = job.status === "printed" ? "reprint" : "print";
+      const response = await fetch(`/api/events/${eventId}/queue`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action, jobId: job.id }) });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? "Could not prepare the print");
+      if (!result.print_url) throw new Error("The print view could not be created");
+      popup.location.replace(result.print_url);
+      const attempt: Attempt = { id: result.attempt_id, attempt_type: action, status: "initiated", initiated_at: new Date().toISOString() };
+      setJobs(current => current.map(item => item.id === job.id ? { ...item, attempts: [...item.attempts, attempt] } : item));
+      setBusy("");
+      router.refresh();
+    } catch (cause) {
+      popup.close();
+      setBusy("");
+      setError(cause instanceof Error ? cause.message : "Could not open the print view");
+    }
+  };
+
+  const visibleJobs = jobs.filter(job => job.status !== "deleted" && (filter === "all" || job.status === filter));
+  const counts: Record<Filter, number> = {
+    all: jobs.filter(job => job.status !== "deleted").length,
+    pending: jobs.filter(job => job.status === "pending").length,
+    accepted: jobs.filter(job => job.status === "accepted").length,
+    printed: jobs.filter(job => job.status === "printed").length,
+  };
+
+  return <div className="simple-queue">
+    {error && <p className="form-error" role="alert">{error}</p>}
+    <nav className="queue-tabs" aria-label="Filter print jobs">
+      {filters.map(status => <button key={status} type="button" className={filter === status ? "queue-tab active" : "queue-tab"} onClick={() => setFilter(status)}>{status === "all" ? "All" : statusLabels[status]} <b>{counts[status]}</b></button>)}
+    </nav>
+    {visibleJobs.length ? <section className="queue-list">{visibleJobs.map(job => {
+      const hasUnconfirmedPrint = job.status === "accepted" && job.attempts.some(attempt => attempt.attempt_type === "print" && attempt.status === "initiated");
+      const attemptsCount = job.attempts.length;
+      return <article className="queue-job compact-queue-job" key={job.id}>
+        <div className="queue-job-head"><strong className="queue-job-number">{job.queue_number}</strong><span className={`queue-status status-${job.status}`}>{statusLabels[job.status]}</span></div>
+        <div className="queue-job-body"><div className="queue-thumb-wrap">{job.preview_url ? <a href={job.preview_url} target="_blank" rel="noreferrer" aria-label={`Open final printable image for ${job.queue_number}`}><NextImage src={job.preview_url} alt={`Final printable image for ${job.queue_number}`} width={280} height={220} unoptimized/></a> : <div className="queue-preview-missing">Preview unavailable</div>}</div>
+          <div className="queue-job-info"><b>{new Date(job.submitted_at).toLocaleString()}</b><span>{job.print_quantity} {job.print_quantity === 1 ? "print" : "prints"} · {job.print_size}</span><span>{attemptsCount} {attemptsCount === 1 ? "print attempt" : "print attempts"}</span>{job.template_name && <span className="queue-job-layout-name">{job.template_name}</span>}</div>
+        </div>
+        <div className="queue-job-actions">
+          {job.status === "pending" && <button className="button queue-action-primary" disabled={!!busy} onClick={() => void perform("accept", job)}><Check size={15}/>{busy === job.id ? "Accepting…" : "Accept"}</button>}
+          {job.status === "accepted" && <button className="button queue-action-primary" disabled={!!busy} onClick={() => void print(job)}><Printer size={15}/>{busy === job.id ? "Preparing…" : "Print"}</button>}
+          {job.status === "printed" && <button className="button queue-action-primary" disabled={!!busy} onClick={() => void print(job)}><RotateCcw size={15}/>{busy === job.id ? "Preparing…" : "Reprint"}</button>}
+          {hasUnconfirmedPrint && <button className="button secondary" disabled={!!busy} onClick={() => void perform("confirm_printed", job)}><Check size={15}/>{busy === job.id ? "Saving…" : "Confirm printed"}</button>}
+          <button className="button danger queue-delete-button" disabled={!!busy} onClick={() => void perform("delete", job)}><Trash2 size={15}/><span>Delete</span></button>
+        </div>
+      </article>;
+    })}</section> : <section className="empty-card"><h3>{filter === "all" ? "No print jobs yet" : `No ${statusLabels[filter]} jobs`}</h3><p>New guest print requests will appear here.</p></section>}
+  </div>;
+}

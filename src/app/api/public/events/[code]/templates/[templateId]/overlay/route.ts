@@ -8,7 +8,7 @@ export async function GET(request:Request,{params}:{params:Promise<{code:string;
  try{
   if(!await rateLimit(request.headers,code,"overlay",300,60))return NextResponse.json({error:"Too many requests"},{status:429});
   const supabase=await createClient();const {data,error}=await supabase.rpc("get_public_guest_event",{p_code:code});if(error||!data)return NextResponse.json({error:"Event unavailable"},{status:404});
-  const template=(data.templates as Array<{id:string;layout_config?:{overlay?:{path?:string}}}>).find(item=>item.id===templateId);const path=template?.layout_config?.overlay?.path;
+  const layout=data.layout as {template_id?:string;layout_config?:{overlay?:{path?:string}}}|undefined;const path=layout?.template_id===templateId?layout.layout_config?.overlay?.path:undefined;
   if(!path)return NextResponse.json({error:"Overlay unavailable"},{status:404});
   const {data:file,error:downloadError}=await createAdminClient().storage.from("snapqueue-template-overlays").download(path);if(downloadError||!file)return NextResponse.json({error:"Overlay unavailable"},{status:404});
   return new Response(file,{headers:{"Content-Type":"image/png","Cache-Control":"private, max-age=300","X-Content-Type-Options":"nosniff"}});
