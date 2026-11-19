@@ -10,7 +10,7 @@ export async function signIn(formData: FormData) {
   const supabase = await createClient();
   const { error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) redirect(`/login?error=${encodeURIComponent(error.message)}`);
-  redirect("/");
+  redirect("/dashboard");
 }
 
 export async function signUp(formData: FormData) {
@@ -39,5 +39,5 @@ export async function createWorkspace(formData: FormData) {
   if (!user) redirect("/login");
   const { error } = await supabase.from("workspaces").insert({ name, created_by: user.id });
   if (error) redirect(`/onboarding?error=${encodeURIComponent(error.message)}`);
-  redirect("/");
+  redirect("/dashboard");
 }

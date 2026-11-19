@@ -42,10 +42,11 @@ export default async function EventDetailPage({ params, searchParams }: { params
   const protocol = forwardedProto === "http" || forwardedProto === "https" ? forwardedProto : host?.startsWith("localhost") ? "http" : "https";
   const origin = host ? new URL(`${protocol}://${host}`).origin : new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000").origin;
   const portalUrl = `${origin}/e/${event.public_event_code}`;
+  const workspaceLogoUrl = workspace.logo_path ? supabase.storage.from("workspace-logos").getPublicUrl(workspace.logo_path).data.publicUrl : null;
   const pendingCount = (rows ?? []).filter((job) => ["pending", "accepted"].includes(job.status)).length;
 
   return <EventOverview event={event} layout={layoutInfo} pendingCount={pendingCount} layoutPreview={preview} layoutEditor={editor} success={query.success} error={query.error}
-    qrCard={<EventQrCard key={`event-qr-${eventId}`} url={portalUrl} eventName={event.name} enabled={event.guest_portal_enabled}/>}
+    qrCard={<EventQrCard key={`event-qr-${eventId}`} url={portalUrl} eventName={event.name} workspaceName={workspace.name} workspaceLogoUrl={workspaceLogoUrl} enabled={event.guest_portal_enabled}/>}
     guestPortalToggle={<form action={toggleGuestAccess}><input type="hidden" name="event_id" value={eventId}/><input type="hidden" name="enabled" value={String(!event.guest_portal_enabled)}/><button className="guest-portal-toggle" aria-label={event.guest_portal_enabled ? "Disable guest portal" : "Enable guest portal"} aria-pressed={event.guest_portal_enabled}><span/>{event.guest_portal_enabled ? "Guest portal open" : "Guest portal closed"}</button></form>}
   />;
 }

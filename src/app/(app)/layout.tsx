@@ -6,6 +6,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 }
 
 async function ProtectedShell({children}:{children:React.ReactNode}) {
-  const {user,workspace}=await requireWorkspace();
-  return <AppShell workspaceName={workspace.name} email={user.email ?? "Account"} signOutAction={signOut}>{children}</AppShell>;
+  const {supabase,user,workspace}=await requireWorkspace();
+  const workspaceLogoUrl=workspace.logo_path ? supabase.storage.from("workspace-logos").getPublicUrl(workspace.logo_path).data.publicUrl : null;
+  return <AppShell workspaceName={workspace.name} workspaceLogoUrl={workspaceLogoUrl} email={user.email ?? "Account"} signOutAction={signOut}>{children}</AppShell>;
 }

@@ -31,7 +31,7 @@ export async function saveEvent(fd:FormData) {
  }
  const {data,error}=await supabase.from("events").update(row).eq("id",id).eq("workspace_id",workspace.id).select("id").single();
  if(error||!data) redirect(`/events/${id?`${id}/edit`:"new"}?error=${encodeURIComponent(error?.message??"Unable to save event")}`);
- revalidatePath("/events"); revalidatePath("/"); redirect(`/events/${data.id}`);
+ revalidatePath("/events"); revalidatePath("/dashboard"); redirect(`/events/${data.id}`);
 }
 export async function deleteEvent(fd:FormData) {
  const {supabase,workspace}=await requireWorkspace(); const id=val(fd,"id");
@@ -47,4 +47,34 @@ export async function duplicateTemplate(fd:FormData) {
  if(error)redirect(`/templates?error=${encodeURIComponent(error.message)}`);revalidatePath("/templates");
 }
 export async function customizeTemplate(fd:FormData){const {supabase,workspace}=await requireWorkspace();const id=val(fd,"template_id");const name=val(fd,"name");const color=val(fd,"background");if(name.length<2||name.length>120||!/^#[0-9a-fA-F]{6}$/.test(color))redirect(`/templates?error=Enter%20a%20valid%20name%20and%20hex%20background`);let layout:unknown;try{layout=JSON.parse(val(fd,"layout_config"))}catch{redirect("/templates?error=Template%20layout%20must%20be%20valid%20JSON")}if(!layout||typeof layout!=="object"||!Array.isArray((layout as {elements?:unknown}).elements))redirect("/templates?error=Layout%20JSON%20must%20contain%20an%20elements%20array");const layoutRecord=layout as {canvas?:Record<string,unknown>};if(layoutRecord.canvas)layoutRecord.canvas={...layoutRecord.canvas,background:color};const {error}=await supabase.from("templates").update({name,background:{type:"color",value:color},layout_config:layout,updated_at:new Date().toISOString()}).eq("id",id).eq("workspace_id",workspace.id).eq("is_system",false);if(error)redirect(`/templates?error=${encodeURIComponent(error.message)}`);revalidatePath("/templates")}
-export async function updateWorkspace(fd:FormData){const {supabase,workspace}=await requireWorkspace();const name=val(fd,"name");if(name.length<2||name.length>80)redirect("/settings?error=Workspace%20name%20must%20be%202-80%20characters");const {error}=await supabase.from("workspaces").update({name,updated_at:new Date().toISOString()}).eq("id",workspace.id);if(error)redirect(`/settings?error=${encodeURIComponent(error.message)}`);revalidatePath("/");redirect("/settings?success=Workspace%20updated")}
+export async function updateWorkspace(fd:FormData){const {supabase,workspace}=await requireWorkspace();const name=val(fd,"name");if(name.length<2||name.length>80)redirect("/settings?error=Workspace%20name%20must%20be%202-80%20characters");const {error}=await supabase.from("workspaces").update({name,updated_at:new Date().toISOString()}).eq("id",workspace.id);if(error)redirect(`/settings?error=${encodeURIComponent(error.message)}`);revalidatePath("/dashboard");redirect("/settings?success=Workspace%20updated")}
+export async function uploadWorkspaceLogo(fd:FormData){
+ const {supabase,workspace,role}=await requireWorkspace();
+ if(!["owner","admin"].includes(role))redirect("/settings?error=Only%20workspace%20owners%20and%20admins%20can%20change%20the%20business%20logo");
+ const file=fd.get("logo");
+ if(!(file instanceof File)||file.size===0)redirect("/settings?error=Choose%20a%20logo%20image%20to%20upload");
+ if(file.size>2*1024*1024)redirect("/settings?error=Logo%20must%20be%202%20MB%20or%20smaller");
+ const extensions:Record<string,string>={"image/png":"png","image/jpeg":"jpg","image/webp":"webp"};
+ const extension=extensions[file.type];
+ if(!extension)redirect("/settings?error=Use%20a%20PNG%2C%20JPG%2C%20or%20WebP%20logo");
+ const path=`${workspace.id}/brand/${randomUUID()}.${extension}`;
+ const bucket=supabase.storage.from("workspace-logos");
+ const {error:uploadError}=await bucket.upload(path,file,{contentType:file.type,cacheControl:"31536000",upsert:false});
+ if(uploadError)redirect(`/settings?error=${encodeURIComponent(uploadError.message)}`);
+ const {error:updateError}=await supabase.from("workspaces").update({logo_path:path,updated_at:new Date().toISOString()}).eq("id",workspace.id);
+ if(updateError){await bucket.remove([path]);redirect(`/settings?error=${encodeURIComponent(updateError.message)}`)}
+ if(workspace.logo_path)await bucket.remove([workspace.logo_path]);
+ revalidatePath("/dashboard");revalidatePath("/settings");
+ redirect("/settings?success=Business%20logo%20updated");
+}
+export async function removeWorkspaceLogo(){
+ const {supabase,workspace,role}=await requireWorkspace();
+ if(!["owner","admin"].includes(role))redirect("/settings?error=Only%20workspace%20owners%20and%20admins%20can%20change%20the%20business%20logo");
+ if(!workspace.logo_path)redirect("/settings?success=No%20business%20logo%20to%20remove");
+ const oldPath=workspace.logo_path;
+ const {error}=await supabase.from("workspaces").update({logo_path:null,updated_at:new Date().toISOString()}).eq("id",workspace.id);
+ if(error)redirect(`/settings?error=${encodeURIComponent(error.message)}`);
+ await supabase.storage.from("workspace-logos").remove([oldPath]);
+ revalidatePath("/dashboard");revalidatePath("/settings");
+ redirect("/settings?success=Business%20logo%20removed");
+}
