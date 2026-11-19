@@ -2,6 +2,7 @@ import Link from "next/link";
 import { ArrowUpRight, CalendarDays, Images, Layers3, Plus, Printer, ReceiptText } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import { requireWorkspace } from "@/lib/workspace";
+import { formatEventTime } from "@/lib/events/format";
 
 function relativeSubmissionTime(value: string) {
   const minutes = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 60_000));
@@ -22,7 +23,7 @@ export default async function DashboardPage() {
     supabase.from("printable_images").select("id", { count: "exact", head: true }).eq("workspace_id", workspace.id),
     supabase.from("print_jobs").select("id", { count: "exact", head: true }).eq("workspace_id", workspace.id).in("status", ["pending", "accepted"]),
     supabase.from("print_jobs").select("id", { count: "exact", head: true }).eq("workspace_id", workspace.id).eq("status", "printed"),
-    supabase.from("events").select("id,name,event_date,status,venue").eq("workspace_id", workspace.id).order("created_at", { ascending: false }).limit(5),
+    supabase.from("events").select("id,name,event_date,start_time,end_time,status,venue").eq("workspace_id", workspace.id).order("created_at", { ascending: false }).limit(5),
     supabase.from("print_jobs").select("id,queue_number,status,submitted_at,print_quantity,print_size,event_id,events(name)").eq("workspace_id", workspace.id).order("submitted_at", { ascending: false }).limit(8),
   ]);
   const stats = [
@@ -44,7 +45,7 @@ export default async function DashboardPage() {
       <div className="stat-note">{note}</div>
     </Link>)}</div>
     <div className="content-grid">
-      <section className="panel"><div className="panel-heading"><h2>Recent events</h2><Link href="/events">View all <ArrowUpRight size={12}/></Link></div>{recentEvents.error?<p className="form-error">Could not load events: {recentEvents.error.message}</p>:recentEvents.data?.length?<div className="table-wrap"><table><thead><tr><th>Event</th><th>Date</th><th>Status</th><th/></tr></thead><tbody>{recentEvents.data.map((event)=><tr key={event.id}><td><Link href={`/events/${event.id}`}>{event.name}</Link></td><td>{event.event_date||"—"}</td><td>{event.status}</td><td>{event.venue||""}</td></tr>)}</tbody></table></div>:<div className="empty-inline">No events yet. Create one to get started.</div>}</section>
+      <section className="panel"><div className="panel-heading"><h2>Recent events</h2><Link href="/events">View all <ArrowUpRight size={12}/></Link></div>{recentEvents.error?<p className="form-error">Could not load events: {recentEvents.error.message}</p>:recentEvents.data?.length?<div className="table-wrap"><table><thead><tr><th>Event</th><th>Schedule</th><th>Status</th><th/></tr></thead><tbody>{recentEvents.data.map((event)=><tr key={event.id}><td><Link href={`/events/${event.id}`}>{event.name}</Link></td><td>{event.event_date||"Date not set"} · {formatEventTime(event.start_time)||"Start time not set"} – {formatEventTime(event.end_time)||"End time not set"}</td><td>{event.status}</td><td>{event.venue||""}</td></tr>)}</tbody></table></div>:<div className="empty-inline">No events yet. Create one to get started.</div>}</section>
       <section className="panel dashboard-jobs-panel"><div className="panel-heading"><h2>Recent print jobs</h2><Link href="/events">Open events <ArrowUpRight size={12}/></Link></div>{recentJobs.error?<p className="form-error">Could not load print jobs: {recentJobs.error.message}</p>:recentJobs.data?.length?<div className="dashboard-jobs-list">{recentJobs.data.map((job)=>{
         const event=Array.isArray(job.events)?job.events[0]:job.events;
         const submitted=new Date(job.submitted_at);

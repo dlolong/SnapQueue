@@ -6,7 +6,7 @@ export default async function EventLayoutPage({ params, searchParams }: { params
   const [{ eventId }, query, { supabase, workspace, role }] = await Promise.all([params, searchParams, requireWorkspace()]);
   if (!["owner", "admin", "operator"].includes(role)) redirect(`/events/${eventId}`);
   const [{ data: event }, { data: settings }, { data: libraryTemplates }] = await Promise.all([
-    supabase.from("events").select("id,name,event_date,status").eq("id", eventId).eq("workspace_id", workspace.id).maybeSingle(),
+    supabase.from("events").select("id,name,event_date,start_time,end_time,status").eq("id", eventId).eq("workspace_id", workspace.id).maybeSingle(),
     supabase.from("event_guest_settings").select("layout_template_id,layout_name,layout_config,layout_width_px,layout_height_px,layout_dpi,layout_version").eq("event_id", eventId).eq("workspace_id", workspace.id).maybeSingle(),
     supabase.from("templates").select("id,name,description,category,width_px,height_px,dpi,background,layout_config,is_active").eq("is_active", true).or(`is_system.eq.true,workspace_id.eq.${workspace.id}`).order("name"),
   ]);

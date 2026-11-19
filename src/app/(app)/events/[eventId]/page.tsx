@@ -11,7 +11,7 @@ export default async function EventDetailPage({ params, searchParams }: { params
   const [{ eventId }, query, { supabase, workspace, role }] = await Promise.all([params, searchParams, requireWorkspace()]);
   if (!["owner", "admin", "operator"].includes(role)) redirect("/events");
   const [{ data: event, error }, { data: settings }, { data: rows, error: jobsError }, { data: templates }] = await Promise.all([
-    supabase.from("events").select("id,name,event_type,event_date,venue,client_name,client_contact,description,status,public_event_code,guest_portal_enabled").eq("id", eventId).eq("workspace_id", workspace.id).maybeSingle(),
+    supabase.from("events").select("id,name,event_type,event_date,start_time,end_time,venue,client_name,client_contact,description,status,public_event_code,guest_portal_enabled").eq("id", eventId).eq("workspace_id", workspace.id).maybeSingle(),
     supabase.from("event_guest_settings").select("layout_template_id,layout_name,layout_config,layout_width_px,layout_height_px,layout_dpi,layout_version").eq("event_id", eventId).eq("workspace_id", workspace.id).maybeSingle(),
     supabase.from("print_jobs").select("status").eq("event_id", eventId).eq("workspace_id", workspace.id),
     supabase.from("templates").select("id,name,description,category,width_px,height_px,dpi,background,layout_config,is_active").eq("is_active", true).or(`is_system.eq.true,workspace_id.eq.${workspace.id}`).order("name"),
@@ -32,7 +32,7 @@ export default async function EventDetailPage({ params, searchParams }: { params
       const config = settings.layout_config as { elements?: { type?: string }[]; overlay?: { path?: string } };
       layoutInfo = { name: settings.layout_name ?? "Event layout", width_px: settings.layout_width_px, height_px: settings.layout_height_px, dpi: settings.layout_dpi, version: settings.layout_version, photo_slots: config.elements?.filter((element) => element.type === "photo").length ?? 0 };
       preview = <TemplatePreview key={`layout-preview-${eventId}`} template={template} overlayUrl={config.overlay?.path ? `/api/events/${eventId}/layout/overlay` : undefined}/>;
-      editor = <TemplateDesigner key={`layout-editor-${eventId}`} template={template} templates={templateChoices} eventId={eventId} eventMeta={{ name: event.name, event_date: event.event_date, status: event.status }} closeHref={`/events/${eventId}`}/>;
+      editor = <TemplateDesigner key={`layout-editor-${eventId}`} template={template} templates={templateChoices} eventId={eventId} eventMeta={{ name: event.name, event_date: event.event_date, start_time: event.start_time, end_time: event.end_time, status: event.status }} closeHref={`/events/${eventId}`}/>;
     }
   }
 

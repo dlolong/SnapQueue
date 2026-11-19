@@ -2,9 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import NextImage from "next/image";
+import { GuestBusinessBrand } from "@/components/guest/business-brand";
 import { renderDesign } from "@/lib/design/render";
 import { addDpiMetadata } from "@/lib/design/raster-metadata.mjs";
 import type { DesignElement, DesignModel } from "@/lib/design/model";
+import { formatEventTime } from "@/lib/events/format";
 
 type Template = {
   id: string;
@@ -33,6 +35,8 @@ type GuestEvent = {
   name: string;
   event_type: string;
   event_date: string | null;
+  start_time: string | null;
+  end_time: string | null;
   venue: string | null;
   primary_color: string;
   secondary_color: string;
@@ -302,15 +306,14 @@ export function GuestPortal({ event, code }: { event: GuestEvent; code: string }
 
   return <div className="guest-portal guest-home" style={{ "--guest-accent": color, "--guest-brand-secondary": event.secondary_color || "#172b62" } as React.CSSProperties}>
     <header className="guest-sticky-header">
-      {event.workspace_logo_url
-        ? <img className="guest-business-logo" src={event.workspace_logo_url} alt={event.workspace_name}/>
-        : <span className="guest-home-brand guest-business-name">{event.workspace_name}</span>}
+      <GuestBusinessBrand name={event.workspace_name} logoUrl={event.workspace_logo_url}/>
     </header>
 
     {!event.layout ? <section className="guest-home-empty"><h1>{event.name}</h1><p>Ordering is not available yet. The event operator has not enabled a print layout.</p></section> : <>
       <section className="guest-home-hero" id="home">
         <div className="guest-home-event">
           <h1>{event.name}</h1>
+          <p>{event.event_date ?? "Date not set"} · Start {formatEventTime(event.start_time) ?? "not set"} · End {formatEventTime(event.end_time) ?? "not set"}</p>
           <p>Add photos, check your preview, then print.</p>
         </div>
       </section>
@@ -336,7 +339,7 @@ export function GuestPortal({ event, code }: { event: GuestEvent; code: string }
           <div className="guest-photo-edit-actions"><button type="button" disabled={!!busy} onClick={() => document.getElementById("replace-photo-" + photo.id)?.click()} aria-label={"Edit " + photo.filename}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 16.5-.8 4.3 4.3-.8L20 7.5 16.5 4 4 16.5Z"/><path d="m14.8 5.7 3.5 3.5"/></svg><span className="guest-visually-hidden">Edit image</span></button><button type="button" disabled={!!busy} onClick={() => void removePhoto(photo.id)} aria-label={"Delete " + photo.filename}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m3 3v7m6-7v7"/></svg><span className="guest-visually-hidden">Delete image</span></button></div>
         </article>)}</div>
       </section>}
-      <footer className="guest-home-footer"><span>Have fun and enjoy your photos!</span><small>Powered by SnapQueue</small></footer>
+      <footer className="guest-home-footer">Have fun and enjoy your photos!</footer>
     </>}
 
     {error && <p className="form-error guest-error guest-home-error" role="alert">{error}<button type="button" onClick={() => setError("")} aria-label="Dismiss">×</button></p>}

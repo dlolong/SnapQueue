@@ -25,7 +25,7 @@ export default async function EditEvent({ params, searchParams }: { params: Prom
           <div className="event-form-grid">
             <div className="field"><label htmlFor="event-name">Event name</label><input id="event-name" name="name" required minLength={2} maxLength={120} defaultValue={event.name}/></div>
             <div className="field"><label htmlFor="event-type">Event type</label><select id="event-type" name="event_type" defaultValue={event.event_type}>{["Birthday","Wedding","Corporate","School","Mall / Walk-in","Private Party","Other"].map(type=><option key={type}>{type}</option>)}</select></div>
-            <div className="field"><label htmlFor="event-date">Event date</label><input id="event-date" name="event_date" type="date" defaultValue={event.event_date ?? ""}/></div>
+            <div className="field"><label htmlFor="event-date">Start date</label><input id="event-date" name="event_date" type="date" defaultValue={event.event_date ?? ""}/></div>
             <div className="field"><label htmlFor="event-status">Event status</label><select id="event-status" name="status" defaultValue={event.status}>{["draft","active","completed","archived"].map(status=><option key={status} value={status}>{status[0].toUpperCase()+status.slice(1)}</option>)}</select></div>
           </div>
         </section>

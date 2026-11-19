@@ -25,7 +25,7 @@ export default async function NewEventPage({ searchParams }: { searchParams: Pro
     <PageHeader
       eyebrow="EVENTS"
       title="Create event"
-      description="Name your event and choose a starting layout. You can add the other details later."
+      description="Name your event, set its schedule, and choose a starting layout."
     />
     <section className="section-card new-event-card">
       {params.error && <p className="form-error" role="alert">{params.error}</p>}
@@ -41,6 +41,21 @@ export default async function NewEventPage({ searchParams }: { searchParams: Pro
             autoFocus
             placeholder="e.g. Ana’s 18th Birthday"
           />
+        </div>
+
+        <div className="event-form-grid new-event-schedule">
+          <div className="new-event-field field">
+            <label htmlFor="new-event-date">Start date</label>
+            <input id="new-event-date" name="event_date" type="date" />
+          </div>
+          <div className="new-event-field field">
+            <label htmlFor="new-event-start-time">Start time</label>
+            <input id="new-event-start-time" name="start_time" type="time" />
+          </div>
+          <div className="new-event-field field">
+            <label htmlFor="new-event-end-time">End time</label>
+            <input id="new-event-end-time" name="end_time" type="time" />
+          </div>
         </div>
 
         <div className="new-event-field field">

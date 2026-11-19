@@ -9,7 +9,7 @@ import { createClient } from "@/lib/supabase/client";
 type Attempt = { id: string; attempt_type: "print" | "reprint"; status: "initiated" | "confirmed"; initiated_at: string };
 type Job = {
   id: string; queue_number: string; order_reference: string; status: "pending" | "accepted" | "printed" | "deleted";
-  print_quantity: number; print_size: string; submitted_at: string; template_name: string; preview_url: string | null;
+  print_quantity: number; submitted_at: string; template_name: string; preview_url: string | null;
   attempts: Attempt[];
 };
 const filters = ["all", "pending", "accepted", "printed"] as const;
@@ -22,7 +22,20 @@ export function QueueDashboard({ eventId, initialJobs }: { eventId: string; init
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
+  const [previewJobId, setPreviewJobId] = useState<string | null>(null);
+  const previewJob = jobs.find(job => job.id === previewJobId) ?? null;
   useEffect(() => setJobs(initialJobs), [initialJobs]);
+  useEffect(() => {
+    if (!previewJob) return;
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") setPreviewJobId(null); };
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [previewJob]);
   useEffect(() => {
     const client = createClient();
     const channel = client.channel(`print-jobs-${eventId}`).on("postgres_changes", { event: "*", schema: "public", table: "print_jobs", filter: `event_id=eq.${eventId}` }, () => router.refresh()).on("postgres_changes", { event: "*", schema: "public", table: "print_attempts", filter: `event_id=eq.${eventId}` }, () => router.refresh()).subscribe();
@@ -95,8 +108,8 @@ export function QueueDashboard({ eventId, initialJobs }: { eventId: string; init
       const attemptsCount = job.attempts.length;
       return <article className="queue-job compact-queue-job" key={job.id}>
         <div className="queue-job-head"><strong className="queue-job-number">{job.queue_number}</strong><span className={`queue-status status-${job.status}`}>{statusLabels[job.status]}</span></div>
-        <div className="queue-job-body"><div className="queue-thumb-wrap">{job.preview_url ? <a href={job.preview_url} target="_blank" rel="noreferrer" aria-label={`Open final printable image for ${job.queue_number}`}><NextImage src={job.preview_url} alt={`Final printable image for ${job.queue_number}`} width={280} height={220} unoptimized/></a> : <div className="queue-preview-missing">Preview unavailable</div>}</div>
-          <div className="queue-job-info"><b>{new Date(job.submitted_at).toLocaleString()}</b><span>{job.print_quantity} {job.print_quantity === 1 ? "print" : "prints"} · {job.print_size}</span><span>{attemptsCount} {attemptsCount === 1 ? "print attempt" : "print attempts"}</span>{job.template_name && <span className="queue-job-layout-name">{job.template_name}</span>}</div>
+        <div className="queue-job-body"><div className="queue-thumb-wrap">{job.preview_url ? <button type="button" className="queue-preview-trigger" aria-label={`View printable image for ${job.queue_number}`} onClick={() => setPreviewJobId(job.id)}><NextImage src={job.preview_url} alt={`Printable image for ${job.queue_number}`} width={280} height={220} unoptimized/></button> : <div className="queue-preview-missing">Preview unavailable</div>}</div>
+          <div className="queue-job-info"><b>{new Date(job.submitted_at).toLocaleString()}</b><span>{job.print_quantity} {job.print_quantity === 1 ? "print" : "prints"}</span><span>{attemptsCount} {attemptsCount === 1 ? "print attempt" : "print attempts"}</span>{job.template_name && <span className="queue-job-layout-name">{job.template_name}</span>}</div>
         </div>
         <div className="queue-job-actions">
           {job.status === "pending" && <button className="button queue-action-primary" disabled={!!busy} onClick={() => void perform("accept", job)}><Check size={15}/>{busy === job.id ? "Accepting…" : "Accept"}</button>}
@@ -107,5 +120,18 @@ export function QueueDashboard({ eventId, initialJobs }: { eventId: string; init
         </div>
       </article>;
     })}</section> : <section className="empty-card"><h3>{filter === "all" ? "No print jobs yet" : `No ${statusLabels[filter]} jobs`}</h3><p>New guest print requests will appear here.</p></section>}
+    {previewJob?.preview_url && <div className="queue-preview-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setPreviewJobId(null); }}>
+      <section className="queue-preview-dialog" role="dialog" aria-modal="true" aria-labelledby="queue-preview-title">
+        <header><h2 id="queue-preview-title">Printable image · {previewJob.queue_number}</h2><button type="button" className="queue-preview-close" autoFocus onClick={() => setPreviewJobId(null)} aria-label="Close printable preview">×</button></header>
+        <div className="queue-preview-image"><NextImage src={previewJob.preview_url} alt={`Printable image for ${previewJob.queue_number}`} fill sizes="(max-width: 700px) 92vw, 80vw" unoptimized/></div>
+        <div className="queue-preview-actions">
+          {previewJob.status === "pending" && <button className="button queue-action-primary" disabled={!!busy} onClick={() => void perform("accept", previewJob)}><Check size={15}/>{busy === previewJob.id ? "Accepting…" : "Accept"}</button>}
+          {previewJob.status === "accepted" && <button className="button queue-action-primary" disabled={!!busy} onClick={() => void print(previewJob)}><Printer size={15}/>{busy === previewJob.id ? "Preparing…" : "Print"}</button>}
+          {previewJob.status === "printed" && <button className="button queue-action-primary" disabled={!!busy} onClick={() => void print(previewJob)}><RotateCcw size={15}/>{busy === previewJob.id ? "Preparing…" : "Reprint"}</button>}
+          {previewJob.status === "accepted" && previewJob.attempts.some(attempt => attempt.attempt_type === "print" && attempt.status === "initiated") && <button className="button secondary" disabled={!!busy} onClick={() => void perform("confirm_printed", previewJob)}><Check size={15}/>{busy === previewJob.id ? "Saving…" : "Confirm printed"}</button>}
+          <button className="button danger queue-delete-button" disabled={!!busy} onClick={() => void perform("delete", previewJob)}><Trash2 size={15}/><span>Delete</span></button>
+        </div>
+      </section>
+    </div>}
   </div>;
 }

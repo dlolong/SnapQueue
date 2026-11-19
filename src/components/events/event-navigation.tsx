@@ -1,9 +1,10 @@
 import Link from "next/link";
+import { formatEventTime } from "@/lib/events/format";
 
-export type EventSummary = { id: string; name: string; event_date: string | null; event_type?: string; status: string };
+export type EventSummary = { id: string; name: string; event_date: string | null; start_time?: string | null; end_time?: string | null; event_type?: string; status: string };
 export function EventOverviewHeader({ event, showEditLink = true }: { event: EventSummary; showEditLink?: boolean }) {
   return <header className="event-overview-header">
-    <div><nav className="event-breadcrumb"><Link href="/events">Events</Link><span>›</span><b>{event.name}</b></nav><h1>{event.name} <span className={`event-header-status status-${event.status}`}>{event.status}</span></h1><p>{event.event_type ?? "Event"} · {event.event_date ?? "Date not set"}</p></div>
+    <div><nav className="event-breadcrumb"><Link href="/events">Events</Link><span>›</span><b>{event.name}</b></nav><h1>{event.name} <span className={`event-header-status status-${event.status}`}>{event.status}</span></h1><p>{event.event_type ?? "Event"} · {event.event_date ?? "Date not set"} · {formatEventTime(event.start_time) ?? "Start time not set"} – {formatEventTime(event.end_time) ?? "End time not set"}</p></div>
     {showEditLink && <Link className="button secondary" href={`/events/${event.id}/edit`}>Edit Event</Link>}
   </header>;
 }

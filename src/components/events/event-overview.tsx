@@ -4,6 +4,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { CalendarDays, Edit2, LayoutTemplate, MapPin, Users } from "lucide-react";
 import { EventOverviewHeader, EventTabs, type EventSummary } from "@/components/events/event-navigation";
+import { formatEventTime } from "@/lib/events/format";
 
 type Props = {
   event: EventSummary & { venue: string | null; client_name: string | null; client_contact: string | null; description: string | null };
@@ -31,7 +32,7 @@ export function EventOverview({ event, layout, pendingCount, layoutPreview, layo
     <div className="event-overview-cards">
       <section className="event-info-card">
         <div className="event-info-card-title"><h2><CalendarDays size={21}/>Event details</h2><Link href={`/events/${event.id}/edit`} aria-label="Edit event details"><Edit2 size={18}/></Link></div>
-        <dl><div><dt>Type</dt><dd>{event.event_type}</dd></div><div><dt>Date</dt><dd>{event.event_date ? new Date(`${event.event_date}T12:00:00`).toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" }) : "Not set"}</dd></div><div><dt>Venue</dt><dd>{event.venue || "—"}</dd></div><div><dt>Client</dt><dd>{event.client_name || "—"}</dd></div><div><dt>Status</dt><dd><span className={`event-header-status status-${event.status}`}>{event.status}</span></dd></div></dl>
+        <dl><div><dt>Type</dt><dd>{event.event_type}</dd></div><div><dt>Start date</dt><dd>{event.event_date ? new Date(`${event.event_date}T12:00:00`).toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" }) : "Not set"}</dd></div><div><dt>Start time</dt><dd>{formatEventTime(event.start_time) ?? "—"}</dd></div><div><dt>End time</dt><dd>{formatEventTime(event.end_time) ?? "—"}</dd></div><div><dt>Venue</dt><dd>{event.venue || "—"}</dd></div><div><dt>Client</dt><dd>{event.client_name || "—"}</dd></div><div><dt>Status</dt><dd><span className={`event-header-status status-${event.status}`}>{event.status}</span></dd></div></dl>
         {event.description && <p className="event-info-description">{event.description}</p>}
       </section>
       <section className="event-layout-card">
