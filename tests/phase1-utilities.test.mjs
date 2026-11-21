@@ -3,9 +3,15 @@ import assert from "node:assert/strict";
 import { addDpiMetadata,pngDimensions,jpegDimensions,imageDpi } from "../src/lib/design/raster-metadata.mjs";
 import { validatePhoto } from "../src/lib/media-validation.mjs";
 import { validateDesign } from "../src/lib/design/validation.mjs";
+import { photoTargetPixels } from "../src/lib/guest/photo-target.mjs";
 
 // A tiny valid 1×1 PNG fixture.
 const onePixelPng=Uint8Array.from(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lS8AAAAASUVORK5CYII=","base64"));
+test("photo optimization targets track layout frame size with zoom headroom",()=>{
+ assert.deepEqual(photoTargetPixels({width:1200,height:1800}),{width:1800,height:2700});
+ assert.deepEqual(photoTargetPixels({width:240,height:480},1),{width:240,height:480});
+ assert.throws(()=>photoTargetPixels({width:0,height:480}),/invalid/i);
+});
 test("export metadata preserves exact canvas dimensions and adds 300 DPI pHYs",()=>{
  const pixels=onePixelPng.slice();pixels[18]=0x02;pixels[19]=0x58;pixels[22]=0x07;pixels[23]=0x08; // 600 × 1800
  const out=addDpiMetadata(pixels,"image/png",300);assert.deepEqual(pngDimensions(out),{width:600,height:1800});

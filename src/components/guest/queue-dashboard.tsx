@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import NextImage from "next/image";
 import { Check, Printer, RotateCcw, Trash2 } from "lucide-react";
@@ -23,6 +23,9 @@ export function QueueDashboard({ eventId, initialJobs }: { eventId: string; init
   const [error, setError] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [previewJobId, setPreviewJobId] = useState<string | null>(null);
+  const [live, setLive] = useState(false);
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastEvents = useRef(new Map<string, number>());
   const previewJob = jobs.find(job => job.id === previewJobId) ?? null;
   useEffect(() => setJobs(initialJobs), [initialJobs]);
   useEffect(() => {
@@ -38,9 +41,26 @@ export function QueueDashboard({ eventId, initialJobs }: { eventId: string; init
   }, [previewJob]);
   useEffect(() => {
     const client = createClient();
-    const channel = client.channel(`print-jobs-${eventId}`).on("postgres_changes", { event: "*", schema: "public", table: "print_jobs", filter: `event_id=eq.${eventId}` }, () => router.refresh()).on("postgres_changes", { event: "*", schema: "public", table: "print_attempts", filter: `event_id=eq.${eventId}` }, () => router.refresh()).subscribe();
-    const timer = setInterval(() => router.refresh(), 15000);
-    return () => { clearInterval(timer); void client.removeChannel(channel); };
+    let subscribed = false;
+    const scheduleRefresh = (id: string) => {
+      const now = Date.now();
+      const previous = lastEvents.current.get(id) ?? 0;
+      if (now - previous < 1000) return;
+      lastEvents.current.set(id, now);
+      if (refreshTimer.current) clearTimeout(refreshTimer.current);
+      refreshTimer.current = setTimeout(() => router.refresh(), 120);
+    };
+    const channel = client.channel(`print-jobs-${eventId}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "print_jobs", filter: `event_id=eq.${eventId}` }, (payload) => scheduleRefresh(`${payload.eventType}:${payload.new && "id" in payload.new ? payload.new.id : "job"}`))
+      .on("postgres_changes", { event: "*", schema: "public", table: "print_attempts", filter: `event_id=eq.${eventId}` }, (payload) => scheduleRefresh(`${payload.eventType}:${payload.new && "id" in payload.new ? payload.new.id : "attempt"}`))
+      .subscribe((status) => {
+        const connected = status === "SUBSCRIBED";
+        if (connected && !subscribed) router.refresh();
+        subscribed = connected;
+        setLive(connected);
+      });
+    const timer = setInterval(() => { if (!subscribed) router.refresh(); }, 15000);
+    return () => { clearInterval(timer); if (refreshTimer.current) clearTimeout(refreshTimer.current); void client.removeChannel(channel); };
   }, [eventId, router]);
 
   const perform = async (action: "accept" | "confirm_printed" | "delete", job: Job) => {
@@ -99,6 +119,7 @@ export function QueueDashboard({ eventId, initialJobs }: { eventId: string; init
   };
 
   return <div className="simple-queue">
+    <p className={`queue-live-indicator ${live ? "connected" : "reconnecting"}`} role="status">{live ? "Live updates connected" : "Reconnecting to live updates…"}</p>
     {error && <p className="form-error" role="alert">{error}</p>}
     <nav className="queue-tabs" aria-label="Filter print jobs">
       {filters.map(status => <button key={status} type="button" className={filter === status ? "queue-tab active" : "queue-tab"} onClick={() => setFilter(status)}>{status === "all" ? "All" : statusLabels[status]} <b>{counts[status]}</b></button>)}

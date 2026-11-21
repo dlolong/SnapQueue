@@ -6,6 +6,8 @@ Phase 1 now accepts event guest orders, stores a printer-ready raster export pri
 
 There is no Windows Agent, device registration, physical printer integration, automatic `printing` state, or offline-print claim in this phase. `mark_ready` is an explicit operator report, not proof supplied by SnapQueue that a printer produced media. The `printing` state is reserved for a future trusted agent.
 
+The repository still contains no agent implementation. Queue realtime currently refreshes the operator UI; it does not dispatch work to a device. The signed artifact-download, checksum, local execution journal, lease, and uncertain-outcome protections below remain future work.
+
 ## Agent design goals
 
 1. Register a device to a workspace using a one-time pairing secret and rotateable device credentials. Never accept workspace IDs as authorization claims from an unauthenticated device.

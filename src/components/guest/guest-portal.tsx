@@ -7,6 +7,9 @@ import { renderDesign } from "@/lib/design/render";
 import { addDpiMetadata } from "@/lib/design/raster-metadata.mjs";
 import type { DesignElement, DesignModel } from "@/lib/design/model";
 import { formatEventTime } from "@/lib/events/format";
+import { optimizeImage, disposeImageOptimizer } from "@/lib/guest/optimize-image";
+import { getSupabasePublicKey } from "@/lib/supabase/public-key";
+import { photoTargetPixels } from "@/lib/guest/photo-target.mjs";
 
 type Template = {
   id: string;
@@ -49,6 +52,9 @@ type GuestEvent = {
 };
 
 type GuestPhoto = { id: string; filename: string; mime_type: string; file_size: number; width_px: number; height_px: number; url: string };
+type UploadAuthorizationResponse = { error?: string; uploads: { path: string; token: string }[] };
+type UploadCompletionResponse = { error?: string; photos: GuestPhoto[] };
+type PendingPhoto = { id: string; filename: string; previewUrl: string; state: "preparing" | "optimizing" | "uploading" | "verifying" | "failed"; progress: number | null; warning?: string; file?: File };
 type Panel = "print" | null;
 
 const toDesign = (template: Template): DesignModel => ({
@@ -85,29 +91,31 @@ const toDesign = (template: Template): DesignModel => ({
 });
 
 const photoSlotCount = (template: Template | undefined) => template?.layout_config.elements?.filter((element) => element.type === "photo").length ?? 0;
-async function prepareGuestImage(file: File): Promise<File> {
-  const bitmap = await createImageBitmap(file);
-  try {
-    let scale = Math.min(1, 2400 / Math.max(bitmap.width, bitmap.height));
-    for (let attempt = 0; attempt < 5; attempt++) {
-      const canvas = document.createElement("canvas");
-      canvas.width = Math.max(1, Math.round(bitmap.width * scale));
-      canvas.height = Math.max(1, Math.round(bitmap.height * scale));
-      const context = canvas.getContext("2d");
-      if (!context) throw new Error("Image resizing is unavailable in this browser.");
-      context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/webp", Math.max(0.62, 0.9 - attempt * 0.07)));
-      if (!blob) throw new Error("This image could not be resized. Try another image.");
-      if (blob.size <= 4 * 1024 * 1024 || attempt === 4) {
-        const extension = blob.type === "image/webp" ? "webp" : blob.type === "image/png" ? "png" : "jpg";
-        return new File([blob], `${file.name.replace(/\.[^.]+$/, "")}.${extension}`, { type: blob.type || "image/jpeg", lastModified: file.lastModified });
-      }
-      scale *= 0.8;
-    }
-    return file;
-  } finally {
-    bitmap.close();
-  }
+function signedUpload(file: File, path: string, token: string, onProgress: (value: number) => void, signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal.aborted) return reject(new DOMException("Upload canceled.", "AbortError"));
+    const base = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const key = getSupabasePublicKey();
+    if (!base || !key) return reject(new Error("Photo storage is not configured."));
+    const url = `${base.replace(/\/$/, "")}/storage/v1/object/upload/sign/snapqueue-guest-uploads/${path.split("/").map(encodeURIComponent).join("/")}?token=${encodeURIComponent(token)}`;
+    const request = new XMLHttpRequest();
+    request.open("PUT", url);
+    request.setRequestHeader("apikey", key);
+    request.setRequestHeader("Authorization", `Bearer ${key}`);
+    request.setRequestHeader("Content-Type", file.type);
+    request.setRequestHeader("x-upsert", "false");
+    request.upload.onprogress = (event) => { if (event.lengthComputable) onProgress(Math.min(99, Math.round((event.loaded / event.total) * 100))); };
+    request.onload = () => request.status >= 200 && request.status < 300 ? resolve() : reject(new Error(`Upload failed (${request.status}).`));
+    request.onerror = () => reject(new Error("Network interrupted during upload."));
+    request.onabort = () => reject(new DOMException("Upload canceled.", "AbortError"));
+    signal.addEventListener("abort", () => request.abort(), { once: true });
+    request.send(file);
+  });
+}
+async function readUploadResponse<T>(response: Response, stage: string): Promise<T> {
+  const body = await response.text();
+  try { return JSON.parse(body) as T; }
+  catch { throw new Error(`${stage} returned an invalid response (HTTP ${response.status}). Please retry.`); }
 }
 const autoPlacePhotos = (design: DesignModel, photos: GuestPhoto[]): DesignModel => {
   const alreadyUsed = new Set(design.elements.filter((element) => element.type === "photo" && element.photoId).map((element) => element.photoId));
@@ -141,17 +149,24 @@ export function GuestPortal({ event, code }: { event: GuestEvent; code: string }
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [guestReady, setGuestReady] = useState(false);
   const [photos, setPhotos] = useState<GuestPhoto[]>([]);
+  const [pendingPhotos, setPendingPhotos] = useState<PendingPhoto[]>([]);
   const [design, setDesign] = useState<DesignModel | null>(event.layout ? toDesign(event.layout) : null);
   const [consent, setConsent] = useState<"yes" | "no" | "">("");
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [panel, setPanel] = useState<Panel>(null);
+  const uploadControllers = useRef(new Map<string, AbortController>());
+  const pendingRef = useRef<PendingPhoto[]>([]);
+  const cancelledUploadIds = useRef(new Set<string>());
 
   const currentTemplate = event.layout;
   const templateId = event.layout.id;
   const photoLimit = photoSlotCount(currentTemplate);
   const hasRequiredSlots = !!design?.elements.some((element) => element.type === "photo" && !element.photoId && (element.required !== false || currentTemplate?.layout_config.photo_slots_required !== false));
-  const canPrint = guestReady && photos.length > 0 && !!design && !hasRequiredSlots;
+  const canPrint = guestReady && photos.length > 0 && pendingPhotos.length === 0 && !!design && !hasRequiredSlots;
+  const overallUploadProgress = pendingPhotos.length > 0 && pendingPhotos.every((photo) => photo.progress !== null)
+    ? Math.floor(pendingPhotos.reduce((sum, photo) => sum + (photo.progress ?? 0) * (photo.file?.size ?? 1), 0) / pendingPhotos.reduce((sum, photo) => sum + (photo.file?.size ?? 1), 0))
+    : null;
   const usedPhotoIds = new Set(design?.elements.filter((element) => element.type === "photo" && element.photoId).map((element) => element.photoId) ?? []);
 
   useEffect(() => {
@@ -175,6 +190,17 @@ export function GuestPortal({ event, code }: { event: GuestEvent; code: string }
     start().catch((reason) => alive && setError(reason instanceof Error ? reason.message : "Guest session unavailable"));
     return () => { alive = false; };
   }, [code]);
+
+  useEffect(() => () => {
+    for (const photo of pendingRef.current) URL.revokeObjectURL(photo.previewUrl);
+    for (const controller of uploadControllers.current.values()) controller.abort();
+    disposeImageOptimizer();
+  }, []);
+  const updatePending = (id: string, update: Partial<PendingPhoto>) => setPendingPhotos((current) => {
+    const next = current.map((photo) => photo.id === id ? { ...photo, ...update } : photo);
+    pendingRef.current = next;
+    return next;
+  });
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -208,25 +234,116 @@ export function GuestPortal({ event, code }: { event: GuestEvent; code: string }
   const upload = async (files: FileList | null) => {
     if (!files?.length) return;
     const selectedFiles = Array.from(files);
-    const remaining = photoLimit - photos.length;
+    const remaining = photoLimit - photos.length - pendingPhotos.length;
     if (remaining <= 0) return setError(`This layout supports up to ${photoLimit} photos. Remove a photo to continue.`);
     if (selectedFiles.length > remaining) return setError(`This layout has room for ${remaining} more photo${remaining === 1 ? "" : "s"}. Select fewer images to continue.`);
     setError("");
-    setBusy("Adding your photos…");
+    const ids = selectedFiles.map(() => crypto.randomUUID());
+    const slots = design?.elements.filter((element) => element.type === "photo" && !element.photoId) ?? [];
+    const previews = selectedFiles.map((file, index): PendingPhoto => ({ id: ids[index], filename: file.name, previewUrl: URL.createObjectURL(file), state: "preparing", progress: null }));
+    setPendingPhotos((current) => { const next = [...current, ...previews]; pendingRef.current = next; return next; });
+    const optimized = new Array<{ id: string; original: File; file: File; width: number; height: number; warning?: string }>(selectedFiles.length);
+    let cursor = 0;
+    const optimizeNext = async () => {
+      while (cursor < selectedFiles.length) {
+        const index = cursor++;
+        const original = selectedFiles[index];
+        const slot = slots[index] ?? slots[slots.length - 1];
+        const target = photoTargetPixels({ width: slot?.width ?? currentTemplate.width_px, height: slot?.height ?? currentTemplate.height_px });
+        const maxWidth = target.width;
+        const maxHeight = target.height;
+        updatePending(ids[index], { state: "optimizing", warning: original.size > 5 * 1024 * 1024 ? "Your photo is large. We're optimizing it for faster uploading while preserving print quality." : undefined });
+        try {
+          const result = await optimizeImage(original, maxWidth, maxHeight);
+          const ext = result.file.type === "image/png" ? "png" : result.file.type === "image/jpeg" ? "jpg" : "webp";
+          const file = new File([result.file], `${original.name.replace(/\.[^.]+$/, "")}.${ext}`, { type: result.file.type, lastModified: original.lastModified });
+          const warning = result.width < (slot?.width ?? 0) || result.height < (slot?.height ?? 0) ? "This photo may look soft at print size." : undefined;
+          optimized[index] = { id: ids[index], original, file, width: result.width, height: result.height, warning };
+          updatePending(ids[index], { file, state: "uploading", warning: warning ?? (file.size < original.size ? "Optimized for this print layout." : undefined) });
+        } catch (reason) { updatePending(ids[index], { state: "failed", warning: reason instanceof Error ? reason.message : "Photo optimization failed." }); }
+      }
+    };
+    await optimizeNext();
+    const ready = optimized.filter((photo): photo is NonNullable<typeof photo> => !!photo && !cancelledUploadIds.current.has(photo.id));
+    if (!ready.length) return;
     try {
-      const form = new FormData();
-      for (const file of selectedFiles) form.append("files", await prepareGuestImage(file));
-      const response = await fetch(`/api/public/events/${code}/photos`, { method: "POST", body: form });
-      const result = await response.json();
-      if (!response.ok) throw Error(result.error ?? "Photo upload failed");
-      const nextPhotos = result.photos ?? [];
+      const authorize = await fetch(`/api/public/events/${code}/photos/upload`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "authorize", files: ready.map(({ file }) => ({ filename: file.name, mime_type: file.type, file_size: file.size })) }) });
+      const authorized = await readUploadResponse<UploadAuthorizationResponse>(authorize, "Upload authorization");
+      if (!authorize.ok) throw new Error(authorized.error ?? "Could not authorize uploads.");
+      let uploadIndex = 0;
+      const uploadedIds = new Set<string>();
+      const uploadNext = async () => {
+        while (uploadIndex < ready.length) {
+          const index = uploadIndex++;
+          const photo = ready[index];
+          const target = authorized.uploads[index];
+          const controller = new AbortController();
+          uploadControllers.current.set(photo.id, controller);
+          try {
+            for (let attempt = 0; ; attempt++) {
+              try { await signedUpload(photo.file, target.path, target.token, (progress) => updatePending(photo.id, { progress }), controller.signal); break; }
+              catch (error) { if (controller.signal.aborted || attempt >= 2) throw error; await new Promise((resolve) => setTimeout(resolve, 400 * 2 ** attempt)); }
+            }
+            uploadedIds.add(photo.id);
+            updatePending(photo.id, { state: "verifying", progress: 99 });
+          } catch (reason) {
+            updatePending(photo.id, { state: "failed", warning: reason instanceof Error ? reason.message : "Upload failed. Tap Retry to continue." });
+          } finally { uploadControllers.current.delete(photo.id); }
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(3, ready.length) }, uploadNext));
+      const verifiedCandidates = ready.filter((photo) => uploadedIds.has(photo.id) && !cancelledUploadIds.current.has(photo.id));
+      if (verifiedCandidates.length) {
+        const complete = await fetch(`/api/public/events/${code}/photos/upload`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "complete", uploads: verifiedCandidates.map((photo) => ({ path: authorized.uploads[ready.indexOf(photo)].path, filename: photo.file.name, mime_type: photo.file.type })) }) });
+        const result = await readUploadResponse<UploadCompletionResponse>(complete, "Photo verification");
+        if (!complete.ok) throw new Error(result.error ?? "Could not verify uploaded photos.");
+        const nextPhotos = [...photos, ...(result.photos ?? [])];
+        setPhotos(nextPhotos);
+        setDesign((current) => current ? autoPlacePhotos(current, nextPhotos) : current);
+        for (const photo of verifiedCandidates) {
+          const item = pendingRef.current.find((pendingPhoto) => pendingPhoto.id === photo.id);
+          if (item) URL.revokeObjectURL(item.previewUrl);
+        }
+        const uploadedPendingIds = new Set(verifiedCandidates.map((photo) => photo.id));
+        setPendingPhotos((current) => { const next = current.filter((photo) => !uploadedPendingIds.has(photo.id)); pendingRef.current = next; return next; });
+      }
+    } catch (reason) {
+      setPendingPhotos((current) => { const next = current.map((photo) => ids.includes(photo.id) && photo.state !== "failed" ? { ...photo, state: "failed" as const, warning: reason instanceof Error ? reason.message : "Upload interrupted. Tap Retry to continue." } : photo); pendingRef.current = next; return next; });
+    }
+  };
+
+  const retryUpload = async (photo: PendingPhoto) => {
+    if (!photo.file) return;
+    updatePending(photo.id, { state: "uploading", progress: null, warning: undefined });
+    const controller = new AbortController();
+    uploadControllers.current.set(photo.id, controller);
+    try {
+      const authResponse = await fetch(`/api/public/events/${code}/photos/upload`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "authorize", files: [{ filename: photo.file.name, mime_type: photo.file.type, file_size: photo.file.size }] }) });
+      const authResult = await readUploadResponse<UploadAuthorizationResponse>(authResponse, "Upload authorization");
+      if (!authResponse.ok) throw new Error(authResult.error ?? "Could not authorize upload.");
+      const target = authResult.uploads[0];
+      for (let attempt = 0; ; attempt++) {
+        try { await signedUpload(photo.file, target.path, target.token, (progress) => updatePending(photo.id, { progress }), controller.signal); break; }
+        catch (error) { if (controller.signal.aborted || attempt >= 2) throw error; await new Promise((resolve) => setTimeout(resolve, 400 * 2 ** attempt)); }
+      }
+      updatePending(photo.id, { state: "verifying", progress: 99 });
+      const response = await fetch(`/api/public/events/${code}/photos/upload`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "complete", uploads: [{ path: target.path, filename: photo.file.name, mime_type: photo.file.type }] }) });
+      const result = await readUploadResponse<UploadCompletionResponse>(response, "Photo verification");
+      if (!response.ok) throw new Error(result.error ?? "Could not verify uploaded photo.");
+      const nextPhotos = [...photos, ...(result.photos ?? [])];
       setPhotos(nextPhotos);
       setDesign((current) => current ? autoPlacePhotos(current, nextPhotos) : current);
-      setBusy("");
-    } catch (reason) {
-      setBusy("");
-      setError(reason instanceof Error ? reason.message : "Photo upload failed");
-    }
+      URL.revokeObjectURL(photo.previewUrl);
+      setPendingPhotos((current) => { const next = current.filter((item) => item.id !== photo.id); pendingRef.current = next; return next; });
+    } catch (reason) { updatePending(photo.id, { state: "failed", warning: reason instanceof Error ? reason.message : "Upload interrupted. Tap Retry to continue." }); }
+    finally { uploadControllers.current.delete(photo.id); }
+  };
+
+  const cancelUpload = (photo: PendingPhoto) => {
+    cancelledUploadIds.current.add(photo.id);
+    uploadControllers.current.get(photo.id)?.abort();
+    URL.revokeObjectURL(photo.previewUrl);
+    setPendingPhotos((current) => { const next = current.filter((item) => item.id !== photo.id); pendingRef.current = next; return next; });
   };
 
   const removePhoto = async (id: string) => {
@@ -244,7 +361,9 @@ export function GuestPortal({ event, code }: { event: GuestEvent; code: string }
     setBusy("Updating your photo…");
     try {
       const form = new FormData();
-      form.append("file", await prepareGuestImage(file));
+      const slot = design?.elements.find((element) => element.type === "photo" && element.photoId === id);
+      const target = photoTargetPixels({ width: slot?.width ?? currentTemplate.width_px, height: slot?.height ?? currentTemplate.height_px });
+      form.append("file", (await optimizeImage(file, target.width, target.height)).file);
       const response = await fetch(`/api/public/events/${code}/photos/${id}`, { method: "PUT", body: form });
       const result = await response.json();
       if (!response.ok) throw Error(result.error ?? "Photo update failed");
@@ -323,11 +442,28 @@ export function GuestPortal({ event, code }: { event: GuestEvent; code: string }
       </section>
 
       <section className={`guest-photo-actions ${Number(photos.length < photoLimit) + Number(canPrint) === 1 ? "single-action" : ""}`} aria-label="Photo booth actions">
-        {photos.length < photoLimit && <label className="guest-add-photos">
-          <span aria-hidden="true">＋</span>Add photos<input type="file" accept="image/jpeg,image/jpg,image/png,image/webp" multiple disabled={!guestReady || !!busy} onChange={(eventChange) => { void upload(eventChange.target.files); eventChange.target.value = ""; }} />
+        {photos.length + pendingPhotos.length < photoLimit && <label className="guest-add-photos">
+          <span aria-hidden="true">＋</span>Add photos<input type="file" accept="image/jpeg,image/jpg,image/png,image/webp" multiple disabled={!guestReady || pendingPhotos.length > 0} onChange={(eventChange) => { void upload(eventChange.target.files); eventChange.target.value = ""; }} />
         </label>}
         {canPrint && <button className="guest-print-cta" type="button" onClick={() => setPanel("print")}><ActionIcon kind="print" />Print</button>}
       </section>
+
+      {pendingPhotos.length > 0 && <section className="guest-photos-section guest-upload-progress" aria-live="polite" aria-label="Photo upload progress">
+        <div className="guest-photos-heading"><h2>Getting your photos ready</h2><strong>{pendingPhotos.length} in progress</strong></div>
+        <p className="guest-upload-overall-status">{pendingPhotos.some((photo) => photo.state === "verifying") ? "Almost done! Checking your photos…" : overallUploadProgress === null ? `Preparing ${pendingPhotos.length} photo${pendingPhotos.length === 1 ? "" : "s"}…` : `Uploading photos… ${overallUploadProgress}%`}</p>
+        <progress className="guest-upload-overall-progress" {...(overallUploadProgress === null ? {} : { value: overallUploadProgress })} max="100" aria-label="Overall photo upload progress" />
+        <div className="guest-photo-cards">{pendingPhotos.map((photo, index) => <article className="guest-photo-edit-card" key={photo.id}>
+          {/* Blob URLs are local previews and must bypass the Next image loader. */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={photo.previewUrl} alt={`Preview of ${photo.filename}`} />
+          <div className="guest-upload-details"><b>{photo.filename}</b><span>{photo.state === "preparing" ? "Preparing your photos…" : photo.state === "optimizing" ? `Optimizing photo ${index + 1} of ${pendingPhotos.length}…` : photo.state === "uploading" ? photo.progress === null ? "Uploading photos…" : `Uploading photos… ${photo.progress}%` : photo.state === "verifying" ? "Almost done! Checking your photos…" : photo.warning ?? "Upload interrupted. Tap Retry to continue."}</span>
+            {photo.warning && photo.state !== "failed" && <small>{photo.warning}</small>}
+            {photo.progress !== null && photo.state === "uploading" && <progress max="100" value={photo.progress} aria-label={`Uploading ${photo.filename}`} />}
+            {photo.state === "failed" && photo.file && <button type="button" className="text-button" onClick={() => void retryUpload(photo)}>Retry</button>}
+            <button type="button" className="text-button" disabled={photo.state === "verifying"} onClick={() => cancelUpload(photo)}>{photo.state === "failed" ? "Remove" : photo.state === "verifying" ? "Checking…" : "Cancel"}</button>
+          </div>
+        </article>)}</div>
+      </section>}
 
       {photos.length > 0 && <section className="guest-photos-section" aria-label="Your uploaded photos">
         <div className="guest-photos-heading"><h2>Your photos</h2><strong>{usedPhotoIds.size} of {photoLimit} used</strong></div>
