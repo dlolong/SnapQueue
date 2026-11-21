@@ -7,7 +7,8 @@ import { requireWorkspace } from "@/lib/workspace";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export default async function LibraryPage({ searchParams }: { searchParams: Promise<{ q?: string; event?: string; date?: string; size?: string }> }) {
-  const [filters, { supabase, workspace }] = await Promise.all([searchParams, requireWorkspace()]);
+  const [filters, { supabase, workspace, role }] = await Promise.all([searchParams, requireWorkspace()]);
+  const canEdit = ["owner", "admin", "operator"].includes(role);
   const [eventsResult, imagesResult] = await Promise.all([
     supabase.from("events").select("id,name").eq("workspace_id", workspace.id).order("event_date", { ascending: false }),
     (async () => {
@@ -48,7 +49,7 @@ export default async function LibraryPage({ searchParams }: { searchParams: Prom
     {(imagesResult.error || eventsResult.error) ? <section className="section-card"><p className="form-error">Unable to load printable images: {(imagesResult.error ?? eventsResult.error)?.message}</p></section>
       : images.length ? <div className="library-grid">{images.map((image) => <article className="library-card printable-image-card" key={image.id}>
         {image.url ? <Image src={image.url} alt={`Print composition ${image.queue_number}`} width={image.width_px} height={image.height_px} unoptimized/> : <div className="thumb-missing">Preview unavailable</div>}
-        <div className="library-card-body"><b title={image.queue_number}>{image.queue_number} · {image.eventName}</b><small>{image.width_inches.toFixed(2)} × {image.height_inches.toFixed(2)} in · {image.width_px} × {image.height_px}px · {image.dpi} DPI</small><small>{image.image_format.replace("image/", "").toUpperCase()}{image.file_size_bytes ? ` · ${(image.file_size_bytes / 1024 / 1024).toFixed(1)} MB` : ""} · {image.print_quantity} copies · v{image.export_version}</small><small>{new Date(image.created_at).toLocaleString()} · <Link href={`/events/${image.event_id}/queue`}>View print job</Link></small><PrintableImageActions eventId={image.event_id} printJobId={image.print_job_id} downloadUrl={image.url} filename={`${image.queue_number}.${image.image_format === "image/jpeg" ? "jpg" : "png"}`}/></div>
+        <div className="library-card-body"><b title={image.queue_number}>{image.queue_number} · {image.eventName}</b><small>{image.width_inches.toFixed(2)} × {image.height_inches.toFixed(2)} in · {image.width_px} × {image.height_px}px · {image.dpi} DPI</small><small>{image.image_format.replace("image/", "").toUpperCase()}{image.file_size_bytes ? ` · ${(image.file_size_bytes / 1024 / 1024).toFixed(1)} MB` : ""} · {image.print_quantity} copies · v{image.export_version}</small><small>{new Date(image.created_at).toLocaleString()} · <Link href={`/events/${image.event_id}/queue`}>View print job</Link></small><PrintableImageActions imageId={image.id} eventId={image.event_id} printJobId={image.print_job_id} downloadUrl={image.url} filename={`${image.queue_number}.${image.image_format === "image/jpeg" ? "jpg" : "png"}`} canDelete={canEdit}/></div>
       </article>)}</div>
       : <div className="empty-card"><div className="empty-icon"><Images size={22}/></div><h3>{filters.q || filters.event || filters.date || filters.size ? "No matching printable images" : "Your Photo Library is empty"}</h3><p>Final print compositions will appear here after guests submit event orders.</p></div>}
   </>;

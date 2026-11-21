@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import { DeleteItemButton } from "@/components/delete-item-button";
 
-export function PrintableImageActions({ eventId, printJobId, downloadUrl, filename }: { eventId: string; printJobId: string; downloadUrl: string | null; filename: string }) {
+export function PrintableImageActions({ imageId, eventId, printJobId, downloadUrl, filename, canDelete }: { imageId: string; eventId: string; printJobId: string; downloadUrl: string | null; filename: string; canDelete: boolean }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const reprint = async () => {
@@ -30,6 +31,7 @@ export function PrintableImageActions({ eventId, printJobId, downloadUrl, filena
   return <div className="printable-image-actions">
     {downloadUrl && <a className="button secondary" href={downloadUrl} download={filename}>Download</a>}
     <button className="button secondary" type="button" onClick={() => void reprint()} disabled={busy}>{busy ? "Preparing…" : "Reprint"}</button>
+    {canDelete && <DeleteItemButton endpoint={`/api/library/${imageId}`} label="Delete" confirmMessage="Permanently delete this printable image and its stored file? The print job record will remain, but this image will no longer be available to download or reprint."/>}
     {error && <small className="form-error">{error}</small>}
   </div>;
 }

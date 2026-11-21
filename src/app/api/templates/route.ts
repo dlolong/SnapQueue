@@ -26,3 +26,13 @@ export async function PATCH(request:Request){
  const {data,error}=await context.supabase.from("templates").update({is_active:body.is_active,updated_at:new Date().toISOString()}).eq("id",body.id).eq("workspace_id",context.workspaceId).eq("is_system",false).select("id").maybeSingle();
  if(error||!data)return NextResponse.json({error:error?.message??"Template not found"},{status:404});return NextResponse.json({ok:true});
 }
+
+export async function DELETE(request:Request){
+ const context=await templateApiContext();if("error" in context)return NextResponse.json({error:context.error},{status:context.status});
+ const body=await request.json().catch(()=>null);if(!body||typeof body.id!=="string")return NextResponse.json({error:"Invalid template delete request"},{status:400});
+ const {data:path,error}=await context.supabase.rpc("delete_workspace_template",{p_template_id:body.id});
+ if(error){const status=/not found/i.test(error.message)?404:/access denied|system templates/i.test(error.message)?403:/used by an event/i.test(error.message)?409:400;return NextResponse.json({error:error.message},{status});}
+ const safePath=typeof path==="string"&&path.startsWith(`${context.workspaceId}/templates/`)?path:null;
+ const {error:storageError}=safePath?await createAdminClient().storage.from("snapqueue-template-overlays").remove([safePath]):{error:null};
+ return NextResponse.json({ok:true,...(storageError?{warning:"Template deleted, but its PNG overlay could not be removed."}:{})});
+}

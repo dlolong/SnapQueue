@@ -576,6 +576,10 @@
 .event-card-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
 .event-card{overflow:hidden;border:1px solid #e4e0f3;border-radius:21px;background:#fff;color:#211b36;text-decoration:none;transition:transform .16s ease,box-shadow .16s ease}
 .event-card:hover{transform:translateY(-2px);box-shadow:0 14px 28px #211b3614}
+.event-card-link{display:block;color:inherit;text-decoration:none}
+.event-card-actions{display:flex;justify-content:flex-end;padding:0 18px 16px}
+.event-card-actions .button{padding:7px 10px;font-size:12px}
+.delete-item-error{flex-basis:100%;margin:0;font-size:11px}
 .event-card-banner{position:relative;display:flex;align-items:flex-end;height:104px;padding:25px;color:#fff}
 .event-card-tone-0 .event-card-banner{background:linear-gradient(115deg,#8152f4,#e43998)}
 .event-card-tone-1 .event-card-banner{background:linear-gradient(115deg,#ff9800,#ee3d78)}

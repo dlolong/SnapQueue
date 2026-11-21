@@ -5,7 +5,7 @@ import Link from "next/link";
 import NextImage from "next/image";
 import { ArrowLeft, CalendarDays, Copy, Download, Eye, Grid3X3, Image as ImageIcon, Layers3, LayoutDashboard, LockKeyhole, Magnet, Maximize2, Megaphone, MousePointer2, Plus, Redo2, RotateCw, Save as SaveIcon, Settings2, Trash2, Undo2, X, Zap, ZoomIn, ZoomOut } from "lucide-react";
 import { addDpiMetadata } from "@/lib/design/raster-metadata.mjs";
-import { renderDesign } from "@/lib/design/render";
+import { orderPhotoSlots, renderDesign } from "@/lib/design/render";
 import type { DesignElement,DesignModel,OverlayElement } from "@/lib/design/model";
 import { formatEventTime } from "@/lib/events/format";
 
@@ -48,7 +48,7 @@ export function TemplateDesigner({template,eventId,eventMeta,templates=[],initia
   if(mode==="draw"){setSelected(null);setSelectedOverlay(false);drag.current={target:"draw",mode:"resize",startX:p.x,startY:p.y,box:{x:p.x,y:p.y,width:1,height:1},ratio:1,before:clone(design)};return;}
   if(selected&&active){const center={x:active.x+active.width/2,y:active.y+active.height/2},rotateHandle=rotationHandlePoint(active);if(!active.locked&&Math.hypot(p.x-rotateHandle.x,p.y-rotateHandle.y)<=Math.max(34,design.canvas.dpi/6)){drag.current={target:"slot",id:active.id,mode:"rotate",startX:p.x,startY:p.y,startAngle:Math.atan2(p.y-center.y,p.x-center.x),startRotation:active.rotation,box:{x:active.x,y:active.y,width:active.width,height:active.height},ratio:active.width/active.height,before:clone(design)};return}const local=localPoint(p,active),h=handleAt(local,{x:-active.width/2,y:-active.height/2,width:active.width,height:active.height});if(h){drag.current={target:"slot",id:active.id,mode:"resize",handle:h,startX:p.x,startY:p.y,box:{x:active.x,y:active.y,width:active.width,height:active.height},ratio:active.width/active.height,before:clone(design)};return}}
   if(selectedOverlay&&design.overlay){const b={x:design.overlay.x,y:design.overlay.y,width:design.overlay.displayWidth,height:design.overlay.displayHeight},h=handleAt(p,b);if(h&&!design.overlay.locked){drag.current={target:"overlay",mode:"resize",handle:h,startX:p.x,startY:p.y,box:b,ratio:b.width/b.height,before:clone(design)};return}}
-  const slot=[...design.elements].filter(e=>e.type==="photo").sort((a,b)=>b.zIndex-a.zIndex).find(e=>{const local=localPoint(p,e);return local.x>=-e.width/2&&local.x<=e.width/2&&local.y>=-e.height/2&&local.y<=e.height/2});
+  const slot=orderPhotoSlots(design.elements).reverse().find(e=>{const local=localPoint(p,e);return local.x>=-e.width/2&&local.x<=e.width/2&&local.y>=-e.height/2&&local.y<=e.height/2});
   if(slot){setSelected(slot.id);setSelectedOverlay(false);if(!slot.locked)drag.current={target:"slot",id:slot.id,mode:"move",startX:p.x,startY:p.y,box:{x:slot.x,y:slot.y,width:slot.width,height:slot.height},ratio:slot.width/slot.height,before:clone(design)};return;}
   const o=design.overlay;if(o&&p.x>=o.x&&p.x<=o.x+o.displayWidth&&p.y>=o.y&&p.y<=o.y+o.displayHeight){setSelected(null);setSelectedOverlay(true);if(!o.locked)drag.current={target:"overlay",mode:"move",startX:p.x,startY:p.y,box:{x:o.x,y:o.y,width:o.displayWidth,height:o.displayHeight},ratio:o.displayWidth/o.displayHeight,before:clone(design)};return;}
   setSelected(null);setSelectedOverlay(false);

@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import NextImage from "next/image";
 import { GuestBusinessBrand } from "@/components/guest/business-brand";
-import { renderDesign } from "@/lib/design/render";
+import { orderPhotoSlots, renderDesign } from "@/lib/design/render";
 import { addDpiMetadata } from "@/lib/design/raster-metadata.mjs";
 import type { DesignElement, DesignModel } from "@/lib/design/model";
 import { formatEventTime } from "@/lib/events/format";
@@ -121,11 +121,15 @@ const autoPlacePhotos = (design: DesignModel, photos: GuestPhoto[]): DesignModel
   const alreadyUsed = new Set(design.elements.filter((element) => element.type === "photo" && element.photoId).map((element) => element.photoId));
   const available = photos.filter((photo) => !alreadyUsed.has(photo.id));
   let next = 0;
+  const placement = new Map<string, string>();
+  for (const slot of orderPhotoSlots(design.elements)) {
+    if (!slot.photoId && available[next]) placement.set(slot.id, available[next++].id);
+  }
   return {
     ...design,
     elements: design.elements.map((element) => {
-      if (element.type !== "photo" || element.photoId || !available[next]) return element;
-      return { ...element, photoId: available[next++].id };
+      const photoId = placement.get(element.id);
+      return photoId ? { ...element, photoId } : element;
     }),
   };
 };
@@ -210,11 +214,12 @@ export function GuestPortal({ event, code }: { event: GuestEvent; code: string }
     const context = canvas.getContext("2d");
     if (!context) return;
     const images: Record<string, CanvasImageSource> = {};
+    const failedPhotos: string[] = [];
     let stopped = false;
     const loaded = Promise.all(photos.map((photo) => new Promise<void>((resolve) => {
       const image = new Image();
       image.onload = () => { images[photo.id] = image; resolve(); };
-      image.onerror = () => resolve();
+      image.onerror = () => { failedPhotos.push(photo.filename); resolve(); };
       image.src = photo.url;
     })));
     const overlay = currentTemplate.layout_config.overlay
@@ -226,7 +231,13 @@ export function GuestPortal({ event, code }: { event: GuestEvent; code: string }
         })
       : Promise.resolve(null);
     Promise.all([loaded, overlay]).then(([, overlayImage]) => {
-      if (!stopped) renderDesign(context, design, images, overlayImage ?? undefined, { showPhotoPlaceholders: false });
+      if (stopped) return;
+      try {
+        renderDesign(context, design, images, overlayImage ?? undefined, { showPhotoPlaceholders: false });
+        if (failedPhotos.length) setError(`Could not load ${failedPhotos.length} photo${failedPhotos.length === 1 ? "" : "s"} in the preview. Remove and upload ${failedPhotos.length === 1 ? "it" : "them"} again.`);
+      } catch {
+        setError("The photo preview could not be rendered on this device. Try reloading the page.");
+      }
     });
     return () => { stopped = true; };
   }, [design, photos, templateId, currentTemplate, code]);
@@ -239,7 +250,7 @@ export function GuestPortal({ event, code }: { event: GuestEvent; code: string }
     if (selectedFiles.length > remaining) return setError(`This layout has room for ${remaining} more photo${remaining === 1 ? "" : "s"}. Select fewer images to continue.`);
     setError("");
     const ids = selectedFiles.map(() => crypto.randomUUID());
-    const slots = design?.elements.filter((element) => element.type === "photo" && !element.photoId) ?? [];
+    const slots = design ? orderPhotoSlots(design.elements).filter((element) => !element.photoId) : [];
     const previews = selectedFiles.map((file, index): PendingPhoto => ({ id: ids[index], filename: file.name, previewUrl: URL.createObjectURL(file), state: "preparing", progress: null }));
     setPendingPhotos((current) => { const next = [...current, ...previews]; pendingRef.current = next; return next; });
     const optimized = new Array<{ id: string; original: File; file: File; width: number; height: number; warning?: string }>(selectedFiles.length);

@@ -1,5 +1,11 @@
 import type { DesignElement,DesignModel } from "./model";
 
+export function orderPhotoSlots(elements: DesignElement[]): DesignElement[] {
+ return elements.map((element,index)=>({element,index})).filter(item=>item.element.type==="photo")
+  .sort((a,b)=>((a.element.slotNumber??a.index+1)-(b.element.slotNumber??b.index+1))||a.index-b.index)
+  .map((item,zIndex)=>({...item.element,zIndex}));
+}
+
 export function renderDesign(
  ctx:CanvasRenderingContext2D,
  design:DesignModel,
@@ -10,9 +16,9 @@ export function renderDesign(
  const {width,height,background}=design.canvas;
  ctx.save();ctx.clearRect(0,0,width,height);ctx.fillStyle=background;ctx.fillRect(0,0,width,height);
  const visible=design.elements.filter(e=>e.visible);
- for(const el of visible.filter(e=>e.type==="photo").sort((a,b)=>a.zIndex-b.zIndex))drawElement(ctx,el,photos,options.showPhotoPlaceholders!==false);
- if(overlay&&design.overlay){const o=design.overlay;ctx.save();ctx.translate(o.x+o.displayWidth/2,o.y+o.displayHeight/2);ctx.rotate(o.rotation*Math.PI/180);ctx.drawImage(overlay,-o.displayWidth/2,-o.displayHeight/2,o.displayWidth,o.displayHeight);ctx.restore();}
+ for(const el of orderPhotoSlots(visible))drawElement(ctx,el,photos,options.showPhotoPlaceholders!==false);
  for(const el of visible.filter(e=>e.type!=="photo").sort((a,b)=>a.zIndex-b.zIndex))drawElement(ctx,el,photos,options.showPhotoPlaceholders!==false);
+ if(overlay&&design.overlay){const o=design.overlay;ctx.save();ctx.translate(o.x+o.displayWidth/2,o.y+o.displayHeight/2);ctx.rotate(o.rotation*Math.PI/180);ctx.drawImage(overlay,-o.displayWidth/2,-o.displayHeight/2,o.displayWidth,o.displayHeight);ctx.restore();}
  ctx.restore();
 }
 
