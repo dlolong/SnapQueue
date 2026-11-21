@@ -117,6 +117,27 @@ async function readUploadResponse<T>(response: Response, stage: string): Promise
   try { return JSON.parse(body) as T; }
   catch { throw new Error(`${stage} returned an invalid response (HTTP ${response.status}). Please retry.`); }
 }
+function loadPhotoImage(url: string, attempts = 3): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const load = (attempt: number, source = url) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => {
+        if (attempt + 1 >= attempts) {
+          reject(new Error("Photo could not be loaded."));
+          return;
+        }
+        window.setTimeout(() => {
+          const retryUrl = new URL(url, window.location.href);
+          retryUrl.searchParams.set("sq_retry", `${Date.now()}-${attempt + 1}`);
+          load(attempt + 1, retryUrl.href);
+        }, 250 * (attempt + 1));
+      };
+      image.src = source;
+    };
+    load(0);
+  });
+}
 const autoPlacePhotos = (design: DesignModel, photos: GuestPhoto[]): DesignModel => {
   const alreadyUsed = new Set(design.elements.filter((element) => element.type === "photo" && element.photoId).map((element) => element.photoId));
   const available = photos.filter((photo) => !alreadyUsed.has(photo.id));
@@ -216,12 +237,10 @@ export function GuestPortal({ event, code }: { event: GuestEvent; code: string }
     const images: Record<string, CanvasImageSource> = {};
     const failedPhotos: string[] = [];
     let stopped = false;
-    const loaded = Promise.all(photos.map((photo) => new Promise<void>((resolve) => {
-      const image = new Image();
-      image.onload = () => { images[photo.id] = image; resolve(); };
-      image.onerror = () => { failedPhotos.push(photo.filename); resolve(); };
-      image.src = photo.url;
-    })));
+    const loaded = Promise.all(photos.map(async (photo) => {
+      try { images[photo.id] = await loadPhotoImage(photo.url); }
+      catch { failedPhotos.push(photo.filename); }
+    }));
     const overlay = currentTemplate.layout_config.overlay
       ? new Promise<HTMLImageElement | null>((resolve) => {
           const image = new Image();
@@ -399,13 +418,10 @@ export function GuestPortal({ event, code }: { event: GuestEvent; code: string }
       const context = canvas.getContext("2d");
       if (!context) throw Error("Canvas rendering is unavailable in this browser");
       const images: Record<string, CanvasImageSource> = {};
-      await Promise.all(photos.map((photo) => new Promise<void>((resolve, reject) => {
-        const image = new Image();
-        image.crossOrigin = "anonymous";
-        image.onload = () => { images[photo.id] = image; resolve(); };
-        image.onerror = () => reject(Error(`Photo “${photo.filename}” could not be loaded. Refresh and try again.`));
-        image.src = photo.url;
-      })));
+      await Promise.all(photos.map(async (photo) => {
+        try { images[photo.id] = await loadPhotoImage(photo.url); }
+        catch { throw Error(`Photo “${photo.filename}” could not be loaded after retrying. Check your connection and try again.`); }
+      }));
       let overlayImage: HTMLImageElement | undefined;
       if (currentTemplate.layout_config.overlay) {
         overlayImage = await new Promise<HTMLImageElement>((resolve, reject) => {
